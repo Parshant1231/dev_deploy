@@ -44,3 +44,18 @@ variable "private_subnet_cidrs" {
   type        = list(string)
   default     = ["10.0.10.0/24", "10.0.11.0/24"]
 }
+
+variable "github_username" {
+  description = "GitHub username"
+  type        = string
+}
+
+variable "jwt_secret" {
+  type      = string
+  sensitive = true
+}
+
+variable "internal_key" {
+  type      = string
+  sensitive = true
+}

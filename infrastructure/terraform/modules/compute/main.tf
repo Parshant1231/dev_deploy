@@ -151,6 +151,23 @@ resource "aws_ecs_task_definition" "api" {
         {
           name  = "AWS_REGION"
           value = var.aws_region
+        },
+        { name = "DYNAMODB_USERS_TABLE", value = var.users_table_name },
+        { name = "DYNAMODB_PROJECTS_TABLE", value = var.projects_table_name },
+        { name = "DYNAMODB_DEPLOYMENTS_TABLE", value = var.deployments_table_name },
+        { name = "DYNAMODB_ENVIRONMENTS_TABLE", value = var.environments_table_name },
+        { name = "DYNAMODB_EVENTS_TABLE", value = var.events_table_name },
+      ]
+
+      # SECRETS - pulled from Secrets Manager at container boot, never logged
+      secrets = [
+        {
+          name      = "DEVDEPLOY_INTERNAL_KEY"
+          valueFrom = "${var.app_secrets_arn}:DEVDEPLOY_INTERNAL_KEY::"
+        },
+        {
+          name      = "JWT_SECRET"
+          valueFrom = "${var.app_secrets_arn}:JWT_SECRET::"
         }
       ]
 

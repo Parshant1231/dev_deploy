@@ -41,11 +41,11 @@ provider "aws" {
 module "networking" {
   source = "../../modules/networking"
 
-  project_name       = var.project_name
-  environment        = var.environment
-  aws_region         = var.aws_region
-  vpc_cidr           = var.vpc_cidr
-  availability_zones = var.availability_zones
+  project_name         = var.project_name
+  environment          = var.environment
+  aws_region           = var.aws_region
+  vpc_cidr             = var.vpc_cidr
+  availability_zones   = var.availability_zones
   public_subnet_cidrs  = var.public_subnet_cidrs
   private_subnet_cidrs = var.private_subnet_cidrs
 }
@@ -57,11 +57,14 @@ module "networking" {
 module "security" {
   source = "../../modules/security"
 
-  project_name = var.project_name
-  environment  = var.environment
-  vpc_id       = module.networking.vpc_id
-  aws_region   = var.aws_region
-  aws_account_id = var.aws_account_id
+  project_name    = var.project_name
+  environment     = var.environment
+  vpc_id          = module.networking.vpc_id
+  aws_region      = var.aws_region
+  aws_account_id  = var.aws_account_id
+  github_username = var.github_username
+  jwt_secret      = var.jwt_secret
+  internal_key    = var.internal_key
 }
 
 # ─────────────────────────────────────────────
@@ -71,9 +74,9 @@ module "security" {
 module "storage" {
   source = "../../modules/storage"
 
-  project_name = var.project_name
-  environment  = var.environment
-  aws_region   = var.aws_region
+  project_name   = var.project_name
+  environment    = var.environment
+  aws_region     = var.aws_region
   aws_account_id = var.aws_account_id
 
 }
@@ -85,18 +88,25 @@ module "storage" {
 module "compute" {
   source = "../../modules/compute"
 
-  project_name          = var.project_name
-  environment           = var.environment
-  aws_region            = var.aws_region
-  vpc_id                = module.networking.vpc_id
-  public_subnet_ids     = module.networking.public_subnet_ids
-  private_subnet_ids    = module.networking.private_subnet_ids
-  alb_security_group_id = module.security.alb_security_group_id
-  ecs_security_group_id = module.security.ecs_security_group_id
-  ecs_task_role_arn     = module.security.ecs_task_role_arn
-  ecs_execution_role_arn = module.security.ecs_execution_role_arn
-  ecr_repository_url    = module.storage.ecr_api_repository_url
-  log_group_name        = module.monitoring.api_log_group_name
+  project_name            = var.project_name
+  environment             = var.environment
+  aws_region              = var.aws_region
+  vpc_id                  = module.networking.vpc_id
+  public_subnet_ids       = module.networking.public_subnet_ids
+  private_subnet_ids      = module.networking.private_subnet_ids
+  alb_security_group_id   = module.security.alb_security_group_id
+  ecs_security_group_id   = module.security.ecs_security_group_id
+  ecs_task_role_arn       = module.security.ecs_task_role_arn
+  ecs_execution_role_arn  = module.security.ecs_execution_role_arn
+  ecr_repository_url      = module.storage.ecr_api_repository_url
+  log_group_name          = module.monitoring.api_log_group_name
+  app_secrets_arn         = module.security.app_secrets_arn
+  users_table_name        = module.storage.users_table_name
+  projects_table_name     = module.storage.projects_table_name
+  deployments_table_name  = module.storage.deployments_table_name
+  environments_table_name = module.storage.environments_table_name
+  events_table_name       = module.storage.events_table_name
+
 }
 
 # ─────────────────────────────────────────────

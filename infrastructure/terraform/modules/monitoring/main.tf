@@ -40,6 +40,16 @@ resource "aws_cloudwatch_log_group" "lambda" {
   }
 }
 
+# The user app pipeline writes logs to /devdeploy/dev/user-apps. This log group must exist before any deployment runs.
+resource "aws_cloudwatch_log_group" "user_apps" {
+  name              = "/devdeploy/${var.environment}/user-apps"
+  retention_in_days = 30
+
+  tags = {
+    Name = "${local.name_prefix}-user-apps-logs"
+  }
+}
+
 # ─────────────────────────────────────────────
 # CLOUDWATCH DASHBOARD
 # ─────────────────────────────────────────────
@@ -55,7 +65,7 @@ resource "aws_cloudwatch_dashboard" "main" {
         height = 6
         properties = {
           title  = "ECS CPU Utilization"
-          region  = var.aws_region
+          region = var.aws_region
           period = 300
           metrics = [
             ["AWS/ECS", "CPUUtilization",
@@ -70,7 +80,7 @@ resource "aws_cloudwatch_dashboard" "main" {
         height = 6
         properties = {
           title  = "ECS Memory Utilization"
-          region  = var.aws_region
+          region = var.aws_region
           period = 300
           metrics = [
             ["AWS/ECS", "MemoryUtilization",
@@ -84,10 +94,10 @@ resource "aws_cloudwatch_dashboard" "main" {
         width  = 24
         height = 6
         properties = {
-          title   = "API Logs"
-          query   = "SOURCE '/devdeploy/${var.environment}/api' | fields @timestamp, @message | sort @timestamp desc | limit 50"
-          region  = var.aws_region
-          view    = "table"
+          title  = "API Logs"
+          query  = "SOURCE '/devdeploy/${var.environment}/api' | fields @timestamp, @message | sort @timestamp desc | limit 50"
+          region = var.aws_region
+          view   = "table"
         }
       }
     ]

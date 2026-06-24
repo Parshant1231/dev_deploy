@@ -252,6 +252,35 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
   })
 }
 
+resource "aws_secretsmanager_secret" "app_secrets" {
+  name = "${local.name_prefix}-app-secrets"
+}
+
+resource "aws_secretsmanager_secret_version" "app_secrets" {
+  secret_id = aws_secretsmanager_secret.app_secrets.id
+
+  secret_string = jsonencode({
+    JWT_SECRET             = var.jwt_secret
+    DEVDEPLOY_INTERNAL_KEY = var.internal_key
+  })
+}
+
+resource "aws_iam_role_policy" "execution_secrets_access" {
+  name = "${var.project_name}-${var.environment}-execution-secrets-policy"
+  role = aws_iam_role.ecs_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = aws_secretsmanager_secret.app_secrets.arn
+      }
+    ]
+  })
+}
+
 # ─────────────────────────────────────────────
 # IAM ROLE: LAMBDA EXECUTION ROLE
 # Used by Lambda functions (auto-destroy, deploy handler)
@@ -316,6 +345,178 @@ resource "aws_iam_role_policy" "lambda_policy" {
           "ecs:ListTasks"
         ]
         Resource = "*"
+      }
+    ]
+  })
+}
+
+# ─────────────────────────────────────────────
+# IAM POLICY: GitHub Actions EC2 Network Discovery
+# Needed by deploy-user-app.yml to look up subnets
+# and security groups when creating an ECS service.
+# ─────────────────────────────────────────────
+
+resource "aws_iam_role_policy" "github_actions_ec2_discovery" {
+  name = "${local.name_prefix}-ec2-discovery-policy"
+  role = aws_iam_role.github_actions.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EC2NetworkDiscovery"
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeSubnets",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeVpcs"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+
+# ─────────────────────────────────────────────
+# GITHUB ACTIONS OIDC PROVIDER
+#
+# This tells AWS to trust GitHub's identity tokens.
+# When GitHub Actions runs, it gets a JWT from GitHub.
+# It sends that JWT to AWS STS.
+# AWS verifies the JWT using GitHub's published public keys.
+# AWS issues temporary credentials that expire in 1 hour.
+#
+# The thumbprint is GitHub's TLS certificate fingerprint.
+# It ensures AWS only accepts tokens from GitHub's real servers.
+# ─────────────────────────────────────────────
+
+resource "aws_iam_openid_connect_provider" "github_actions" {
+  url = "https://token.actions.githubusercontent.com"
+
+  client_id_list = ["sts.amazonaws.com"]
+
+  # GitHub's OIDC thumbprint
+  # This is a fixed value for GitHub Actions — does not change per account
+  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+
+  tags = {
+    Name = "${local.name_prefix}-github-oidc"
+  }
+}
+
+# ─────────────────────────────────────────────
+# IAM ROLE — GitHub Actions
+#
+# GitHub Actions assumes this role during the pipeline.
+# The trust policy restricts which GitHub repositories
+# are allowed to assume this role.
+#
+# The condition "token.actions.githubusercontent.com:sub"
+# locks the role to a specific repository and branch.
+# This prevents other GitHub repos from assuming your role.
+# ─────────────────────────────────────────────
+
+resource "aws_iam_role" "github_actions" {
+  name = "${local.name_prefix}-github-actions-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github_actions.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            # Replace YOUR_GITHUB_USERNAME with your actual GitHub username
+            # The * wildcard allows any branch to deploy
+            # To restrict to main only: "repo:YOUR_GITHUB_USERNAME/devdeploy:ref:refs/heads/main"
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_username}/*:*"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${local.name_prefix}-github-actions-role"
+  }
+}
+
+# ─────────────────────────────────────────────
+# IAM POLICY — GitHub Actions Permissions
+#
+# Principle of least privilege:
+# Only the permissions GitHub Actions actually needs.
+# ─────────────────────────────────────────────
+
+resource "aws_iam_role_policy" "github_actions" {
+  name = "${local.name_prefix}-github-actions-policy"
+  role = aws_iam_role.github_actions.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ECRAuthentication"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "ECRImagePush"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:PutImage"
+        ]
+        Resource = [
+          "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/devdeploy-*"
+        ]
+      },
+      {
+        Sid    = "ECSDeployment"
+        Effect = "Allow"
+        Action = [
+          "ecs:RegisterTaskDefinition",
+          "ecs:CreateService",
+          "ecs:UpdateService",
+          "ecs:DeleteService",
+          "ecs:DescribeServices",
+          "ecs:DescribeTaskDefinition",
+          "ecs:ListTaskDefinitions",
+          "ecs:DescribeClusters"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "IAMPassRole"
+        Effect = "Allow"
+        Action = "iam:PassRole"
+        Resource = [
+          "arn:aws:iam::${var.aws_account_id}:role/devdeploy-*"
+        ]
+      },
+      {
+        Sid    = "CloudWatchLogs"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/devdeploy/*"
       }
     ]
   })

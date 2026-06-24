@@ -32,3 +32,7 @@ output "dynamodb_table_names" {
   description = "All DynamoDB table names"
   value       = module.storage.dynamodb_table_names
 }
+
+output "github_actions_role_arn" {
+  value = module.security.github_actions_role_arn
+}

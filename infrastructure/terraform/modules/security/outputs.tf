@@ -17,3 +17,13 @@ output "ecs_execution_role_arn" {
 output "lambda_role_arn" {
   value = aws_iam_role.lambda_role.arn
 }
+
+output "github_actions_role_arn" {
+  description = "IAM role ARN for GitHub Actions OIDC"
+  value       = aws_iam_role.github_actions.arn
+}
+
+output "app_secrets_arn" {
+  description = "ARN of the Secrets Manager secret holding app runtime secrets"
+  value       = aws_secretsmanager_secret.app_secrets.arn
+}
