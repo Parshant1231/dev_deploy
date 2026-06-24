@@ -130,16 +130,16 @@ jobs:
             echo "dockerfile=$APP_DIR/Dockerfile" >> $GITHUB_OUTPUT
             echo "context=$APP_DIR" >> $GITHUB_OUTPUT
           else
-            PORT="${{ inputs.port }}"
+            echo "No Dockerfile found, generating one for framework: nodejs"
             cat > generated.Dockerfile << 'EOF'
-            FROM node:18-alpine
-            WORKDIR /app
-            COPY package*.json ./
-            RUN npm ci --only=production
-            COPY . .
-            EXPOSE 3000
-            CMD ["node", "index.js"]
-            EOF
+          FROM node:18-alpine
+          WORKDIR /app
+          COPY package*.json ./
+          RUN npm ci --only=production
+          COPY . .
+          EXPOSE 3000
+          CMD ["node", "index.js"]
+          EOF
             echo "dockerfile=generated.Dockerfile" >> $GITHUB_OUTPUT
             echo "context=$APP_DIR" >> $GITHUB_OUTPUT
           fi
@@ -269,7 +269,6 @@ jobs:
         id: deploy-service
         run: |
           SERVICE_NAME="devdeploy-${{ inputs.project_id }}-${{ inputs.environment }}"
-          VPC_CONFIG_FILE="infrastructure/terraform/environments/dev/vpc_config.json"
 
           # Get VPC configuration from AWS
           SUBNET_IDS=$(aws ec2 describe-subnets \
@@ -298,7 +297,6 @@ jobs:
               --desired-count 1
           else
             echo "Creating new ECS service: $SERVICE_NAME"
-            # Get ALB target group (or create one — simplified for Phase 4)
             aws ecs create-service \
               --cluster ${{ env.ECS_CLUSTER }} \
               --service-name $SERVICE_NAME \
