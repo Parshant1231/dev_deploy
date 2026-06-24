@@ -9,7 +9,7 @@ WORKDIR /app
 # Copy package files first — Docker layer caching.
 # If package.json hasn't changed, npm install is skipped.
 COPY package*.json ./
-RUN npm ci --only=production=false
+RUN npm ci
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -30,7 +30,7 @@ RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
 COPY package*.json ./
-RUN npm ci --only=production && npm cache clean --force
+RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
 
