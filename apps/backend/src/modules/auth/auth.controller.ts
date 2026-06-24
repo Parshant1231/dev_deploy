@@ -24,32 +24,35 @@ export const authController = {
     }
   },
 
-  async getMe(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  async getMe(req: Request, res: Response, next: NextFunction) {
+    const authReq = req as AuthenticatedRequest;
     try {
-      const user = await authService.getMe(req.user.userId);
+      const user = await authService.getMe(authReq.user.userId);
       sendSuccess(res, user);
     } catch (error) {
       next(error);
     }
   },
 
-  async connectGithub(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  async connectGithub(req: Request, res: Response, next: NextFunction) {
+    const authReq = req as AuthenticatedRequest;
     try {
       const { code } = req.body;
       if (!code) {
         res.status(400).json({ success: false, error: 'GitHub OAuth code is required' });
         return;
       }
-      const user = await authService.connectGithub(req.user.userId, code);
+      const user = await authService.connectGithub(authReq.user.userId, code);
       sendSuccess(res, user, 200, 'GitHub account connected successfully');
     } catch (error) {
       next(error);
     }
   },
 
-  async disconnectGithub(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  async disconnectGithub(req: Request, res: Response, next: NextFunction) {
+    const authReq = req as AuthenticatedRequest;
     try {
-      await authService.disconnectGithub(req.user.userId);
+      await authService.disconnectGithub(authReq.user.userId);
       sendSuccess(res, null, 200, 'GitHub account disconnected');
     } catch (error) {
       next(error);

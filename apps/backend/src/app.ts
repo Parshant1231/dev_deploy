@@ -28,6 +28,20 @@ app.use(
   })
 );
 
+// Raw body needed for GitHub webhook signature verification
+// This must come before express.json()
+app.use(
+  '/api/v1/webhooks/github',
+  express.raw({ type: 'application/json' }),
+  (req, _res, next) => {
+    // Make raw body available alongside parsed body
+    if (Buffer.isBuffer(req.body)) {
+      req.body = JSON.parse(req.body.toString('utf8'));
+    }
+    next();
+  }
+);
+
 // ─────────────────────────────────────────────
 // REQUEST PARSING
 // ─────────────────────────────────────────────

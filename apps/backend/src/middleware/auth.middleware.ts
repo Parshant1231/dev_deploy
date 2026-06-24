@@ -46,3 +46,22 @@ export function authenticate(
     throw AppError.unauthorized('Authentication failed');
   }
 }
+
+
+// Internal API key middleware for machine-to-machine calls.
+// Used by GitHub Actions to update deployment status.
+// Not for user-facing routes.
+
+export function authenticateInternal(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): void {
+  const internalKey = req.headers['x-internal-key'];
+
+  if (!internalKey || internalKey !== process.env.DEVDEPLOY_INTERNAL_KEY) {
+    throw AppError.unauthorized('Invalid internal API key');
+  }
+
+  next();
+}
