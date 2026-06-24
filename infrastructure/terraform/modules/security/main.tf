@@ -463,61 +463,100 @@ resource "aws_iam_role_policy" "github_actions" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      {
-        Sid      = "ECRAuthentication"
-        Effect   = "Allow"
-        Action   = "ecr:GetAuthorizationToken"
-        Resource = "*"
-      },
-      {
-        Sid    = "ECRImagePush"
-        Effect = "Allow"
-        Action = [
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchGetImage",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload",
-          "ecr:PutImage"
-        ]
-        Resource = [
-          "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/devdeploy-*"
-        ]
-      },
-      {
-        Sid    = "ECSDeployment"
-        Effect = "Allow"
-        Action = [
-          "ecs:RegisterTaskDefinition",
-          "ecs:CreateService",
-          "ecs:UpdateService",
-          "ecs:DeleteService",
-          "ecs:DescribeServices",
-          "ecs:DescribeTaskDefinition",
-          "ecs:ListTaskDefinitions",
-          "ecs:DescribeClusters"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "IAMPassRole"
-        Effect = "Allow"
-        Action = "iam:PassRole"
-        Resource = [
-          "arn:aws:iam::${var.aws_account_id}:role/devdeploy-*"
-        ]
-      },
-      {
-        Sid    = "CloudWatchLogs"
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ]
-        Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/devdeploy/*"
-      }
-    ]
+    {
+      Sid    = "ECRAuthentication"
+      Effect = "Allow"
+      Action = "ecr:GetAuthorizationToken"
+      Resource = "*"
+    },
+    {
+      Sid    = "ECRImagePush"
+      Effect = "Allow"
+      Action = [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:PutImage"
+      ]
+      Resource = [
+        "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/devdeploy-*"
+      ]
+    },
+    {
+      Sid    = "ECSDeployment"
+      Effect = "Allow"
+      Action = [
+        "ecs:RegisterTaskDefinition",
+        "ecs:DeregisterTaskDefinition",
+        "ecs:UpdateService",
+        "ecs:CreateService",
+        "ecs:DeleteService",
+        "ecs:DescribeServices",
+        "ecs:DescribeTaskDefinition",
+        "ecs:ListTaskDefinitions",
+        "ecs:DescribeTasks",
+        "ecs:ListTasks",
+        "ecs:WaitUntilServicesStable"
+      ]
+      Resource = "*"
+    },
+    {
+      Sid    = "ALBManagement"
+      Effect = "Allow"
+      Action = [
+        "elasticloadbalancing:CreateTargetGroup",
+        "elasticloadbalancing:DeleteTargetGroup",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:ModifyTargetGroupAttributes",
+        "elasticloadbalancing:CreateRule",
+        "elasticloadbalancing:DeleteRule",
+        "elasticloadbalancing:DescribeRules",
+        "elasticloadbalancing:ModifyRule",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:RegisterTargets",
+        "elasticloadbalancing:DeregisterTargets",
+        "elasticloadbalancing:DescribeTargetHealth"
+      ]
+      Resource = "*"
+    },
+    {
+      Sid    = "EC2NetworkQuery"
+      Effect = "Allow"
+      Action = [
+        "ec2:DescribeVpcs",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeSecurityGroups"
+      ]
+      Resource = "*"
+    },
+    {
+      Sid    = "CloudWatchLogs"
+      Effect = "Allow"
+      Action = [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogGroups"
+      ]
+      Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/devdeploy/*"
+    },
+    {
+      Sid    = "IAMPassRole"
+      Effect = "Allow"
+      Action = "iam:PassRole"
+      Resource = [
+        "arn:aws:iam::${var.aws_account_id}:role/devdeploy-*"
+      ]
+    },
+    {
+      Sid    = "STSIdentity"
+      Effect = "Allow"
+      Action = "sts:GetCallerIdentity"
+      Resource = "*"
+    }
+  ]
   })
 }

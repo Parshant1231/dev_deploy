@@ -17,3 +17,8 @@ output "alb_arn" {
 output "api_service_name" {
   value = aws_ecs_service.api.name
 }
+
+output "alb_listener_arn" {
+  description = "ALB HTTP listener ARN — used by pipeline to create listener rules"
+  value       = aws_lb_listener.http.arn
+}

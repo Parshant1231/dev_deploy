@@ -91,9 +91,34 @@ resource "aws_lb_target_group" "api" {
 }
 
 # ─────────────────────────────────────────────
-# ALB LISTENER
-# Listens on port 80 and forwards to target group.
-# In Phase 10, this will be upgraded to HTTPS.
+# API LISTENER RULE
+# Priority 1 — routes API traffic to the backend.
+# Matches: /health, /api/*, /webhooks/*
+# ─────────────────────────────────────────────
+
+resource "aws_lb_listener_rule" "api" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 1
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.api.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/health", "/api/*", "/api/v1/*"]
+    }
+  }
+}
+
+# ─────────────────────────────────────────────
+# ALB DEFAULT LISTENER
+# Any request that doesn't match a listener rule
+# receives a 404 response.
+# This is important because the ALB is shared across
+# all user deployments — unknown hosts must not
+# accidentally route to the wrong application.
 # ─────────────────────────────────────────────
 
 resource "aws_lb_listener" "http" {
@@ -102,8 +127,12 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
 
   default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.api.arn
+    type = "fixed-response"
+    fixed_response {
+      content_type = "application/json"
+      message_body = "{\"error\":\"Not found\",\"message\":\"No application is deployed at this address\"}"
+      status_code  = "404"
+    }
   }
 }
 

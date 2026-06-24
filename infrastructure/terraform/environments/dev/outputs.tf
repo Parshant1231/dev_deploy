@@ -36,3 +36,8 @@ output "dynamodb_table_names" {
 output "github_actions_role_arn" {
   value = module.security.github_actions_role_arn
 }
+
+output "alb_listener_arn" {
+  description = "ALB listener ARN for dynamic rule creation"
+  value       = module.compute.alb_listener_arn
+}
