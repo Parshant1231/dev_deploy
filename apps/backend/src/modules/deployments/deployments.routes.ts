@@ -28,5 +28,10 @@ router.get('/', deploymentsController.list as any);
 router.get('/:deploymentId', deploymentsController.get as any);
 router.post('/:deploymentId/cancel', deploymentsController.cancel as any);
 router.patch('/:deploymentId/status', authenticateEither as any, deploymentsController.updateStatus as any);
+// Add to deployments routes
+router.get(
+  '/:deploymentId/url',
+  deploymentsController.getUrl as any
+);
 
 export default router;

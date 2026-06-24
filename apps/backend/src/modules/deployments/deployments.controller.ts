@@ -66,4 +66,16 @@ export const deploymentsController = {
       sendSuccess(res, null, 200, 'Status updated');
     } catch (e) { next(e); }
   },
+
+  // Add to deploymentsController object
+  async getUrl(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+    try {
+      const result = await deploymentsService.getDeploymentUrl(
+          requireParam(req, 'deploymentId'),
+          requireParam(req, 'projectId'),
+          req.user.userId
+      );
+      sendSuccess(res, result);
+    } catch (e) { next(e); }
+  },
 };

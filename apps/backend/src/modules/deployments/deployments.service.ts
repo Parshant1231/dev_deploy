@@ -78,6 +78,27 @@ export class DeploymentsService {
     return deployment;
   }
 
+  // Add to DeploymentsService class
+
+  async getDeploymentUrl(
+    deploymentId: string,
+    projectId: string,
+    userId: string
+  ): Promise<{ url: string | null; status: DeploymentStatus }> {
+    const deployment = await this.getDeployment(deploymentId, projectId, userId);
+
+    if (deployment.status !== 'RUNNING') {
+      return { url: null, status: deployment.status };
+    }
+
+    // The URL is stored when the pipeline reports RUNNING status
+    const url = deployment.albDnsName
+      ? `http://${deployment.albDnsName}`
+      : null;
+
+    return { url, status: deployment.status };
+  }
+
   async updateDeploymentStatus(
     deploymentId: string,
     projectId: string,
@@ -137,3 +158,4 @@ export class DeploymentsService {
     }
   }
 }
+
