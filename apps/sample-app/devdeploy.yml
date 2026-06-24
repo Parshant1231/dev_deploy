@@ -1,0 +1,21 @@
+build:
+  framework: nodejs
+  node_version: 18
+
+run:
+  port: 3000
+  start_command: node index.js
+  health_check_path: /health
+  health_check_interval: 30
+
+resources:
+  cpu: 256
+  memory: 512
+
+environments:
+  dev:
+    ttl_hours: 24
+  staging:
+    ttl_hours: 48
+  production:
+    ttl_hours: 0
