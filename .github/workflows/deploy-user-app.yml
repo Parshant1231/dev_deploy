@@ -62,6 +62,11 @@ on:
         description: 'DevDeploy API URL for status updates'
         required: true
         type: string
+      app_directory:
+        description: 'Path to app within repo (e.g. apps/sample-app)'
+        required: false
+        default: '.'
+        type: string
 
 permissions:
   id-token: write
@@ -119,10 +124,12 @@ jobs:
       - name: Select or generate Dockerfile
         id: dockerfile
         run: |
-          if [ -f "user-app/Dockerfile" ]; then
+          APP_DIR="user-app/${{ inputs.app_directory }}"
+
+          if [ -f "$APP_DIR/Dockerfile" ]; then
             echo "Using user-provided Dockerfile"
-            echo "dockerfile=user-app/Dockerfile" >> $GITHUB_OUTPUT
-            echo "context=user-app" >> $GITHUB_OUTPUT
+            echo "dockerfile=$APP_DIR/Dockerfile" >> $GITHUB_OUTPUT
+            echo "context=$APP_DIR" >> $GITHUB_OUTPUT
           else
             echo "Generating Dockerfile for framework: ${{ inputs.framework }}"
             FRAMEWORK="${{ inputs.framework }}"
@@ -130,58 +137,57 @@ jobs:
             BUILD_CMD="${{ inputs.build_command }}"
             START_CMD="${{ inputs.start_command }}"
 
-            # Generate framework-appropriate Dockerfile
             case $FRAMEWORK in
               nodejs)
                 cat > generated.Dockerfile << EOF
-          FROM node:18-alpine
-          WORKDIR /app
-          COPY package*.json ./
-          RUN npm ci --only=production
-          COPY . .
-          EXPOSE $PORT
-          HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:$PORT/health || exit 1
-          CMD $START_CMD
-          EOF
-                ;;
-              react|static)
-                cat > generated.Dockerfile << EOF
-          FROM node:18-alpine AS builder
-          WORKDIR /app
-          COPY package*.json ./
-          RUN npm ci
-          COPY . .
-          RUN $BUILD_CMD
-          FROM nginx:alpine
-          COPY --from=builder /app/build /usr/share/nginx/html
-          COPY --from=builder /app/dist /usr/share/nginx/html 2>/dev/null || true
-          EXPOSE 80
-          CMD ["nginx", "-g", "daemon off;"]
-          EOF
-                ;;
-              nextjs)
-                cat > generated.Dockerfile << EOF
-          FROM node:18-alpine AS builder
-          WORKDIR /app
-          COPY package*.json ./
-          RUN npm ci
-          COPY . .
-          ENV NEXT_TELEMETRY_DISABLED 1
-          RUN $BUILD_CMD
-          FROM node:18-alpine AS runner
-          WORKDIR /app
-          ENV NODE_ENV production
-          COPY --from=builder /app/.next/standalone ./
-          COPY --from=builder /app/.next/static ./.next/static
-          EXPOSE $PORT
-          CMD ["node", "server.js"]
-          EOF
-                ;;
-            esac
+                FROM node:18-alpine
+                WORKDIR /app
+                COPY package*.json ./
+                RUN npm ci --only=production
+                COPY . .
+                EXPOSE $PORT
+                HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:$PORT/health || exit 1
+                CMD ["node", "index.js"]
+                EOF
+                                ;;
+                              react|static)
+                                cat > generated.Dockerfile << EOF
+                FROM node:18-alpine AS builder
+                WORKDIR /app
+                COPY package*.json ./
+                RUN npm ci
+                COPY . .
+                RUN $BUILD_CMD
+                FROM nginx:alpine
+                COPY --from=builder /app/build /usr/share/nginx/html
+                COPY --from=builder /app/dist /usr/share/nginx/html 2>/dev/null || true
+                EXPOSE 80
+                CMD ["nginx", "-g", "daemon off;"]
+                EOF
+                                ;;
+                              nextjs)
+                                cat > generated.Dockerfile << EOF
+                FROM node:18-alpine AS builder
+                WORKDIR /app
+                COPY package*.json ./
+                RUN npm ci
+                COPY . .
+                ENV NEXT_TELEMETRY_DISABLED 1
+                RUN $BUILD_CMD
+                FROM node:18-alpine AS runner
+                WORKDIR /app
+                ENV NODE_ENV production
+                COPY --from=builder /app/.next/standalone ./
+                COPY --from=builder /app/.next/static ./.next/static
+                EXPOSE $PORT
+                CMD ["node", "server.js"]
+                EOF
+                                ;;
+                            esac
 
-            echo "dockerfile=generated.Dockerfile" >> $GITHUB_OUTPUT
-            echo "context=user-app" >> $GITHUB_OUTPUT
-          fi
+                            echo "dockerfile=generated.Dockerfile" >> $GITHUB_OUTPUT
+                            echo "context=$APP_DIR" >> $GITHUB_OUTPUT
+                          fi
 
       - name: Build Docker image
         env:
@@ -381,4 +387,3 @@ jobs:
             -H "Content-Type: application/json" \
             -H "X-Internal-Key: ${{ secrets.DEVDEPLOY_INTERNAL_KEY }}" \
             -d "{\"status\":\"FAILED\",\"data\":{\"errorMessage\":\"GitHub Actions pipeline failed. Check workflow run ${{ github.run_id }} for details.\"}}"
-            
