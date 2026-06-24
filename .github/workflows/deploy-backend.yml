@@ -43,6 +43,8 @@ env:
   ECS_CLUSTER: devdeploy-dev-cluster
   ECS_SERVICE: devdeploy-dev-api-service
   CONTAINER_NAME: api
+  ECS_TASK_DEFINITION: devdeploy-dev-api
+
 
 jobs:
   # ─────────────────────────────────────────────
@@ -128,9 +130,8 @@ jobs:
       - name: Download current task definition
         run: |
           aws ecs describe-task-definition \
-            --task-definition ${{ env.ECS_SERVICE }} \
-            --query taskDefinition \
-            > task-definition.json
+            --task-definition ${{ env.ECS_TASK_DEFINITION }} \
+            --query taskDefinition > task-definition.json
 
       # Replace the image URI in the task definition
       # with the newly built image
