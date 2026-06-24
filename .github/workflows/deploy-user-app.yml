@@ -1,10 +1,5 @@
 name: Deploy User Application
 
-# ─────────────────────────────────────────────
-# This workflow is triggered manually by the
-# DevDeploy orchestrator (Phase 6).
-# It receives deployment parameters as inputs.
-# ─────────────────────────────────────────────
 on:
   workflow_dispatch:
     inputs:
@@ -29,43 +24,36 @@ on:
         required: true
         default: 'dev'
         type: choice
-        options:
-          - dev
-          - staging
-          - production
+        options: [dev, staging, production]
       framework:
         description: 'Application framework'
         required: true
         default: 'nodejs'
         type: choice
-        options:
-          - nodejs
-          - react
-          - nextjs
-          - static
+        options: [nodejs, react, nextjs, static, docker]
       port:
         description: 'Application port'
         required: true
         default: '3000'
         type: string
-      build_command:
-        description: 'Build command'
+      health_check_path:
+        description: 'Health check path'
         required: false
-        default: 'npm run build'
+        default: '/health'
         type: string
-      start_command:
-        description: 'Start command'
+      cpu:
+        description: 'CPU units (256, 512, 1024)'
         required: false
-        default: 'node index.js'
+        default: '256'
+        type: string
+      memory:
+        description: 'Memory MB (512, 1024, 2048)'
+        required: false
+        default: '512'
         type: string
       api_url:
-        description: 'DevDeploy API URL for status updates'
+        description: 'DevDeploy API URL'
         required: true
-        type: string
-      app_directory:
-        description: 'Path to app within repo (e.g. apps/sample-app)'
-        required: false
-        default: '.'
         type: string
 
 permissions:
@@ -79,14 +67,13 @@ env:
 
 jobs:
   deploy:
-    name: Build and Deploy ${{ inputs.repo_full_name }}
+    name: Deploy ${{ inputs.repo_full_name }}
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout DevDeploy (for Dockerfiles and scripts)
+      - name: Checkout DevDeploy repository
         uses: actions/checkout@v4
 
-      # Check out the USER'S repository at the specific commit
       - name: Checkout user repository
         uses: actions/checkout@v4
         with:
@@ -101,176 +88,348 @@ jobs:
           role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # ─────────────────────────────────────────
-      # UPDATE STATUS: BUILDING
-      # ─────────────────────────────────────────
-      - name: Update deployment status — BUILDING
+      # ─────────────────────────────────────────────
+      # STATUS: BUILDING
+      # ─────────────────────────────────────────────
+
+      - name: Status → BUILDING
         run: |
-          curl -s -X PATCH \
+          curl -sf -X PATCH \
             "${{ inputs.api_url }}/api/v1/projects/${{ inputs.project_id }}/deployments/${{ inputs.deployment_id }}/status" \
             -H "Content-Type: application/json" \
             -H "X-Internal-Key: ${{ secrets.DEVDEPLOY_INTERNAL_KEY }}" \
-            -d '{"status":"BUILDING","data":{"buildStartedAt":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}}'
+            -d "{\"status\":\"BUILDING\",\"data\":{\"buildStartedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}" \
+            || echo "Warning: Status update failed (API may not be reachable)"
 
-      - name: Login to Amazon ECR
+      - name: Login to ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # ─────────────────────────────────────────
-      # BUILD THE USER'S APPLICATION
-      # Uses the user's Dockerfile if it exists.
-      # Falls back to a generated Dockerfile based on framework.
-      # ─────────────────────────────────────────
-      - name: Select or generate Dockerfile
+      # ─────────────────────────────────────────────
+      # DETECT OR GENERATE DOCKERFILE
+      # ─────────────────────────────────────────────
+
+      - name: Detect or generate Dockerfile
         id: dockerfile
         run: |
-          APP_DIR="user-app/${{ inputs.app_directory }}"
-          if [ -f "$APP_DIR/Dockerfile" ]; then
-            echo "Using user-provided Dockerfile"
-            echo "dockerfile=$APP_DIR/Dockerfile" >> $GITHUB_OUTPUT
-            echo "context=$APP_DIR" >> $GITHUB_OUTPUT
-          else
-            echo "No Dockerfile found, generating one for framework: nodejs"
-            cat > generated.Dockerfile << 'EOF'
-          FROM node:18-alpine
-          WORKDIR /app
-          COPY package*.json ./
-          RUN npm ci --only=production
-          COPY . .
-          EXPOSE 3000
-          CMD ["node", "index.js"]
-          EOF
-            echo "dockerfile=generated.Dockerfile" >> $GITHUB_OUTPUT
-            echo "context=$APP_DIR" >> $GITHUB_OUTPUT
+          PROJECT_ID="${{ inputs.project_id }}"
+          FRAMEWORK="${{ inputs.framework }}"
+          PORT="${{ inputs.port }}"
+          HEALTH_PATH="${{ inputs.health_check_path }}"
+
+          if [ -f "user-app/devdeploy.yml" ] || [ -f "user-app/devdeploy.yaml" ]; then
+            echo "devdeploy.yml found — config will be applied"
           fi
 
-      - name: Build Docker image
+          if [ -f "user-app/Dockerfile" ]; then
+            echo "Using user-provided Dockerfile"
+            echo "dockerfile_path=user-app/Dockerfile" >> $GITHUB_OUTPUT
+            echo "build_context=user-app" >> $GITHUB_OUTPUT
+          else
+            echo "Generating Dockerfile for framework: $FRAMEWORK"
+
+            case $FRAMEWORK in
+              nodejs)
+                cat > user-app/Dockerfile.generated << DOCKERFILE
+FROM node:18-alpine AS production
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production 2>/dev/null || npm install --only=production
+COPY . .
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
+USER nodejs
+EXPOSE $PORT
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:${PORT}${HEALTH_PATH} || exit 1
+CMD ["node", "index.js"]
+DOCKERFILE
+                ;;
+              react)
+                cat > user-app/Dockerfile.generated << DOCKERFILE
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+FROM nginx:alpine AS production
+COPY --from=builder /app/build /usr/share/nginx/html
+RUN test -d /app/dist && cp -r /app/dist/* /usr/share/nginx/html/ || true
+EXPOSE 80
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:80/ || exit 1
+CMD ["nginx", "-g", "daemon off;"]
+DOCKERFILE
+                ;;
+              nextjs)
+                cat > user-app/Dockerfile.generated << DOCKERFILE
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+FROM node:18-alpine AS production
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
+COPY --from=builder --chown=nodejs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nodejs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nodejs:nodejs /app/public ./public 2>/dev/null || true
+USER nodejs
+EXPOSE $PORT
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:${PORT}/api/health || exit 1
+CMD ["node", "server.js"]
+DOCKERFILE
+                ;;
+              static)
+                cat > user-app/Dockerfile.generated << DOCKERFILE
+FROM nginx:alpine
+COPY . /usr/share/nginx/html
+EXPOSE 80
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:80/ || exit 1
+CMD ["nginx", "-g", "daemon off;"]
+DOCKERFILE
+                ;;
+            esac
+
+            echo "dockerfile_path=user-app/Dockerfile.generated" >> $GITHUB_OUTPUT
+            echo "build_context=user-app" >> $GITHUB_OUTPUT
+          fi
+
+      # ─────────────────────────────────────────────
+      # BUILD AND PUSH IMAGE
+      # ─────────────────────────────────────────────
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        id: build
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ inputs.project_id }}-${{ inputs.commit_sha }}
         run: |
-          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          IMAGE_URI="$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG"
+          LATEST_URI="$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ inputs.project_id }}-latest"
 
-          docker build \
+          docker buildx build \
             --platform linux/amd64 \
+            --push \
             --tag $IMAGE_URI \
-            --build-arg PORT=${{ inputs.port }} \
-            --build-arg COMMIT_SHA=${{ inputs.commit_sha }} \
-            -f ${{ steps.dockerfile.outputs.dockerfile }} \
-            ${{ steps.dockerfile.outputs.context }}
+            --tag $LATEST_URI \
+            -f ${{ steps.dockerfile.outputs.dockerfile_path }} \
+            ${{ steps.dockerfile.outputs.build_context }}
 
-          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
 
-      # ─────────────────────────────────────────
-      # UPDATE STATUS: PUSHING_IMAGE
-      # ─────────────────────────────────────────
-      - name: Update deployment status — PUSHING_IMAGE
+      # ─────────────────────────────────────────────
+      # STATUS: PUSHING_IMAGE
+      # ─────────────────────────────────────────────
+
+      - name: Status → PUSHING_IMAGE
         if: success()
         run: |
-          curl -s -X PATCH \
+          curl -sf -X PATCH \
             "${{ inputs.api_url }}/api/v1/projects/${{ inputs.project_id }}/deployments/${{ inputs.deployment_id }}/status" \
             -H "Content-Type: application/json" \
             -H "X-Internal-Key: ${{ secrets.DEVDEPLOY_INTERNAL_KEY }}" \
-            -d '{"status":"PUSHING_IMAGE"}'
+            -d '{"status":"PUSHING_IMAGE"}' \
+            || echo "Warning: Status update failed"
 
-      - name: Push image to ECR
+      # ─────────────────────────────────────────────
+      # CREATE ALB TARGET GROUP
+      # One target group per project+environment.
+      # If it already exists (re-deploy), reuse it.
+      # ─────────────────────────────────────────────
+
+      - name: Create or get ALB target group
+        id: target-group
+        run: |
+          TG_NAME="dd-${{ inputs.project_id }}-${{ inputs.environment }}"
+          # ALB target group names max 32 chars
+          TG_NAME=$(echo $TG_NAME | cut -c1-32)
+
+          # Get VPC ID
+          VPC_ID=$(aws ec2 describe-vpcs \
+            --filters "Name=tag:Name,Values=devdeploy-dev-vpc" \
+            --query 'Vpcs[0].VpcId' \
+            --output text)
+
+          # Check if target group already exists
+          EXISTING_TG_ARN=$(aws elbv2 describe-target-groups \
+            --names $TG_NAME \
+            --query 'TargetGroups[0].TargetGroupArn' \
+            --output text 2>/dev/null || echo "None")
+
+          if [ "$EXISTING_TG_ARN" = "None" ] || [ -z "$EXISTING_TG_ARN" ]; then
+            echo "Creating new target group: $TG_NAME"
+
+            TG_ARN=$(aws elbv2 create-target-group \
+              --name $TG_NAME \
+              --protocol HTTP \
+              --port ${{ inputs.port }} \
+              --vpc-id $VPC_ID \
+              --target-type ip \
+              --health-check-protocol HTTP \
+              --health-check-path "${{ inputs.health_check_path }}" \
+              --health-check-interval-seconds 30 \
+              --healthy-threshold-count 2 \
+              --unhealthy-threshold-count 3 \
+              --health-check-timeout-seconds 5 \
+              --matcher HttpCode=200-299 \
+              --query 'TargetGroups[0].TargetGroupArn' \
+              --output text)
+
+            echo "Created target group: $TG_ARN"
+          else
+            echo "Reusing existing target group: $EXISTING_TG_ARN"
+            TG_ARN=$EXISTING_TG_ARN
+          fi
+
+          echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
+          echo "tg_name=$TG_NAME" >> $GITHUB_OUTPUT
+
+      # ─────────────────────────────────────────────
+      # CREATE ALB LISTENER RULE
+      # Routes traffic for this project's subdomain-style
+      # host header to the correct target group.
+      # ─────────────────────────────────────────────
+
+      - name: Create or update ALB listener rule
+        id: listener-rule
+        run: |
+          LISTENER_ARN="${{ secrets.ALB_LISTENER_ARN }}"
+          TG_ARN="${{ steps.target-group.outputs.tg_arn }}"
+          HOST_PATTERN="${{ inputs.project_id }}-${{ inputs.environment }}.*"
+
+          # Check if a rule already exists for this host pattern
+          EXISTING_RULE_ARN=$(aws elbv2 describe-rules \
+            --listener-arn $LISTENER_ARN \
+            --query "Rules[?Conditions[?Field=='host-header' && Values[?contains(@,'${{ inputs.project_id }}-${{ inputs.environment }}')]]].[RuleArn]" \
+            --output text 2>/dev/null | head -1)
+
+          if [ -n "$EXISTING_RULE_ARN" ] && [ "$EXISTING_RULE_ARN" != "None" ]; then
+            echo "Updating existing listener rule: $EXISTING_RULE_ARN"
+            aws elbv2 modify-rule \
+              --rule-arn $EXISTING_RULE_ARN \
+              --actions Type=forward,TargetGroupArn=$TG_ARN
+          else
+            echo "Creating new listener rule for host: $HOST_PATTERN"
+
+            # Get highest current priority and add 1
+            MAX_PRIORITY=$(aws elbv2 describe-rules \
+              --listener-arn $LISTENER_ARN \
+              --query 'Rules[?Priority!=`default`].Priority' \
+              --output text | tr '\t' '\n' | sort -n | tail -1)
+
+            NEXT_PRIORITY=$((${MAX_PRIORITY:-1} + 1))
+            # Keep priority within ALB limit (1-50000)
+            if [ $NEXT_PRIORITY -gt 50000 ]; then NEXT_PRIORITY=50000; fi
+
+            aws elbv2 create-rule \
+              --listener-arn $LISTENER_ARN \
+              --priority $NEXT_PRIORITY \
+              --conditions Field=host-header,Values="$HOST_PATTERN" \
+              --actions Type=forward,TargetGroupArn=$TG_ARN
+          fi
+
+          # Build the public URL for this deployment
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --query "LoadBalancers[?contains(DNSName, 'devdeploy')].DNSName" \
+            --output text | head -1)
+
+          # The URL uses the Host header pattern as a subdomain-style identifier
+          # In production with a real domain, this becomes a real subdomain URL
+          PUBLIC_URL="http://${{ inputs.project_id }}-${{ inputs.environment }}.${ALB_DNS}"
+
+          echo "public_url=$PUBLIC_URL" >> $GITHUB_OUTPUT
+
+      # ─────────────────────────────────────────────
+      # STATUS: DEPLOYING
+      # ─────────────────────────────────────────────
+
+      - name: Status → DEPLOYING
         if: success()
         run: |
-          docker push ${{ env.IMAGE_URI }}
-          docker tag ${{ env.IMAGE_URI }} \
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ inputs.project_id }}-latest
-
-          docker push \
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ inputs.project_id }}-latest
-
-      # ─────────────────────────────────────────
-      # UPDATE STATUS: DEPLOYING
-      # ─────────────────────────────────────────
-      - name: Update deployment status — DEPLOYING
-        if: success()
-        run: |
-          curl -s -X PATCH \
+          curl -sf -X PATCH \
             "${{ inputs.api_url }}/api/v1/projects/${{ inputs.project_id }}/deployments/${{ inputs.deployment_id }}/status" \
             -H "Content-Type: application/json" \
             -H "X-Internal-Key: ${{ secrets.DEVDEPLOY_INTERNAL_KEY }}" \
-            -d "{\"status\":\"DEPLOYING\",\"data\":{\"imageUri\":\"${{ env.IMAGE_URI }}\",\"deployStartedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
+            -d "{\"status\":\"DEPLOYING\",\"data\":{\"imageUri\":\"${{ steps.build.outputs.image_uri }}\",\"deployStartedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}" \
+            || echo "Warning: Status update failed"
 
-      # ─────────────────────────────────────────
-      # DEPLOY TO ECS
-      # Creates or updates an ECS service for this
-      # project + environment combination.
-      # ─────────────────────────────────────────
+      # ─────────────────────────────────────────────
+      # REGISTER ECS TASK DEFINITION
+      # ─────────────────────────────────────────────
+
       - name: Register ECS task definition
-        id: register-task
+        id: task-def
         run: |
-          TASK_FAMILY="devdeploy-user-${{ inputs.project_id }}-${{ inputs.environment }}"
-          LOG_GROUP="/devdeploy/dev/user-apps"
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          TASK_FAMILY="devdeploy-${{ inputs.project_id }}-${{ inputs.environment }}"
+          LOG_GROUP="/devdeploy/dev/user-apps"
 
-          TASK_DEF=$(cat << EOF
-          {
-            "family": "$TASK_FAMILY",
-            "networkMode": "awsvpc",
-            "requiresCompatibilities": ["FARGATE"],
-            "cpu": "256",
-            "memory": "512",
-            "executionRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/devdeploy-dev-ecs-execution-role",
-            "taskRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/devdeploy-dev-ecs-task-role",
-            "containerDefinitions": [
-              {
-                "name": "app",
-                "image": "${{ env.IMAGE_URI }}",
-                "essential": true,
-                "portMappings": [
-                  {
-                    "containerPort": ${{ inputs.port }},
-                    "protocol": "tcp"
-                  }
-                ],
-                "environment": [
-                  { "name": "PORT", "value": "${{ inputs.port }}" },
-                  { "name": "NODE_ENV", "value": "${{ inputs.environment }}" },
-                  { "name": "COMMIT_SHA", "value": "${{ inputs.commit_sha }}" },
-                  { "name": "DEPLOYED_AT", "value": "$(date -u +%Y-%m-%dT%H:%M:%SZ)" }
-                ],
-                "logConfiguration": {
-                  "logDriver": "awslogs",
-                  "options": {
-                    "awslogs-group": "$LOG_GROUP",
-                    "awslogs-region": "${{ env.AWS_REGION }}",
-                    "awslogs-stream-prefix": "${{ inputs.project_id }}"
-                  }
-                },
-                "healthCheck": {
-                  "command": [
-                    "CMD-SHELL",
-                    "wget -qO- http://localhost:${{ inputs.port }}/health || exit 1"
-                  ],
-                  "interval": 30,
-                  "timeout": 5,
-                  "retries": 3,
-                  "startPeriod": 60
-                }
-              }
-            ]
-          }
-          EOF
-          )
+          # Ensure log group exists
+          aws logs create-log-group --log-group-name $LOG_GROUP 2>/dev/null || true
 
           TASK_ARN=$(aws ecs register-task-definition \
-            --cli-input-json "$TASK_DEF" \
+            --family $TASK_FAMILY \
+            --network-mode awsvpc \
+            --requires-compatibilities FARGATE \
+            --cpu "${{ inputs.cpu }}" \
+            --memory "${{ inputs.memory }}" \
+            --execution-role-arn "arn:aws:iam::${ACCOUNT_ID}:role/devdeploy-dev-ecs-execution-role" \
+            --task-role-arn "arn:aws:iam::${ACCOUNT_ID}:role/devdeploy-dev-ecs-task-role" \
+            --container-definitions "[
+              {
+                \"name\": \"app\",
+                \"image\": \"${{ steps.build.outputs.image_uri }}\",
+                \"essential\": true,
+                \"portMappings\": [{
+                  \"containerPort\": ${{ inputs.port }},
+                  \"protocol\": \"tcp\"
+                }],
+                \"environment\": [
+                  {\"name\": \"PORT\", \"value\": \"${{ inputs.port }}\"},
+                  {\"name\": \"NODE_ENV\", \"value\": \"${{ inputs.environment }}\"},
+                  {\"name\": \"COMMIT_SHA\", \"value\": \"${{ inputs.commit_sha }}\"},
+                  {\"name\": \"DEPLOYED_AT\", \"value\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}
+                ],
+                \"logConfiguration\": {
+                  \"logDriver\": \"awslogs\",
+                  \"options\": {
+                    \"awslogs-group\": \"${LOG_GROUP}\",
+                    \"awslogs-region\": \"${{ env.AWS_REGION }}\",
+                    \"awslogs-stream-prefix\": \"${{ inputs.project_id }}\"
+                  }
+                },
+                \"healthCheck\": {
+                  \"command\": [\"CMD-SHELL\", \"wget -qO- http://localhost:${{ inputs.port }}${{ inputs.health_check_path }} || exit 1\"],
+                  \"interval\": 30,
+                  \"timeout\": 5,
+                  \"retries\": 3,
+                  \"startPeriod\": 60
+                }
+              }
+            ]" \
             --query 'taskDefinition.taskDefinitionArn' \
             --output text)
 
           echo "task_arn=$TASK_ARN" >> $GITHUB_OUTPUT
-          echo "task_family=$TASK_FAMILY" >> $GITHUB_OUTPUT
+
+      # ─────────────────────────────────────────────
+      # CREATE OR UPDATE ECS SERVICE
+      # Now registers with the ALB target group
+      # ─────────────────────────────────────────────
 
       - name: Create or update ECS service
-        id: deploy-service
+        id: ecs-service
         run: |
-          SERVICE_NAME="devdeploy-${{ inputs.project_id }}-${{ inputs.environment }}"
+          SERVICE_NAME="dd-${{ inputs.project_id }}-${{ inputs.environment }}"
+          SERVICE_NAME=$(echo $SERVICE_NAME | cut -c1-36)
+          TG_ARN="${{ steps.target-group.outputs.tg_arn }}"
 
-          # Get VPC configuration from AWS
           SUBNET_IDS=$(aws ec2 describe-subnets \
             --filters "Name=tag:Name,Values=devdeploy-dev-private-subnet-*" \
             --query 'Subnets[*].SubnetId' \
@@ -281,62 +440,84 @@ jobs:
             --query 'SecurityGroups[0].GroupId' \
             --output text)
 
-          # Check if service already exists
           SERVICE_STATUS=$(aws ecs describe-services \
             --cluster ${{ env.ECS_CLUSTER }} \
             --services $SERVICE_NAME \
             --query 'services[0].status' \
-            --output text 2>/dev/null || echo "NONE")
+            --output text 2>/dev/null)
 
           if [ "$SERVICE_STATUS" = "ACTIVE" ]; then
-            echo "Updating existing ECS service: $SERVICE_NAME"
+            echo "Updating ECS service: $SERVICE_NAME"
             aws ecs update-service \
               --cluster ${{ env.ECS_CLUSTER }} \
               --service $SERVICE_NAME \
-              --task-definition ${{ steps.register-task.outputs.task_arn }} \
+              --task-definition ${{ steps.task-def.outputs.task_arn }} \
               --desired-count 1
           else
-            echo "Creating new ECS service: $SERVICE_NAME"
+            echo "Creating ECS service: $SERVICE_NAME"
             aws ecs create-service \
               --cluster ${{ env.ECS_CLUSTER }} \
               --service-name $SERVICE_NAME \
-              --task-definition ${{ steps.register-task.outputs.task_arn }} \
+              --task-definition ${{ steps.task-def.outputs.task_arn }} \
               --desired-count 1 \
               --launch-type FARGATE \
-              --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_IDS],securityGroups=[$SG_ID],assignPublicIp=DISABLED}"
+              --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_IDS],securityGroups=[$SG_ID],assignPublicIp=DISABLED}" \
+              --load-balancers "targetGroupArn=$TG_ARN,containerName=app,containerPort=${{ inputs.port }}"
           fi
 
           echo "service_name=$SERVICE_NAME" >> $GITHUB_OUTPUT
 
-      # Wait for ECS to confirm the service is stable
       - name: Wait for ECS service stability
         run: |
-          echo "Waiting for ECS service to stabilize..."
+          echo "Waiting for ECS service to stabilize (up to 10 minutes)..."
           aws ecs wait services-stable \
             --cluster ${{ env.ECS_CLUSTER }} \
-            --services ${{ steps.deploy-service.outputs.service_name }}
-          echo "ECS service is stable"
+            --services ${{ steps.ecs-service.outputs.service_name }}
+          echo "Service is stable"
 
-      # ─────────────────────────────────────────
-      # UPDATE STATUS: RUNNING
-      # ─────────────────────────────────────────
-      - name: Update deployment status — RUNNING
+      # ─────────────────────────────────────────────
+      # STATUS: RUNNING — with public URL
+      # ─────────────────────────────────────────────
+
+      - name: Status → RUNNING
         if: success()
         run: |
-          curl -s -X PATCH \
+          PUBLIC_URL="${{ steps.listener-rule.outputs.public_url }}"
+          ECS_SERVICE="${{ steps.ecs-service.outputs.service_name }}"
+
+          curl -sf -X PATCH \
             "${{ inputs.api_url }}/api/v1/projects/${{ inputs.project_id }}/deployments/${{ inputs.deployment_id }}/status" \
             -H "Content-Type: application/json" \
             -H "X-Internal-Key: ${{ secrets.DEVDEPLOY_INTERNAL_KEY }}" \
-            -d "{\"status\":\"RUNNING\",\"data\":{\"ecsServiceArn\":\"${{ steps.deploy-service.outputs.service_name }}\",\"deployFinishedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
+            -d "{
+              \"status\": \"RUNNING\",
+              \"data\": {
+                \"albDnsName\": \"$PUBLIC_URL\",
+                \"ecsServiceArn\": \"$ECS_SERVICE\",
+                \"deployFinishedAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+              }
+            }" \
+            || echo "Warning: Status update failed"
 
-      # ─────────────────────────────────────────
-      # UPDATE STATUS: FAILED (if any step failed)
-      # ─────────────────────────────────────────
-      - name: Update deployment status — FAILED
+          echo ""
+          echo "╔══════════════════════════════════════════╗"
+          echo "║        DEPLOYMENT SUCCESSFUL             ║"
+          echo "╠══════════════════════════════════════════╣"
+          echo "║  Project:  ${{ inputs.project_id }}      "
+          echo "║  Commit:   ${{ inputs.commit_sha }}      "
+          echo "║  URL:      $PUBLIC_URL                   "
+          echo "╚══════════════════════════════════════════╝"
+
+      # ─────────────────────────────────────────────
+      # STATUS: FAILED
+      # ─────────────────────────────────────────────
+
+      - name: Status → FAILED
         if: failure()
         run: |
-          curl -s -X PATCH \
+          curl -sf -X PATCH \
             "${{ inputs.api_url }}/api/v1/projects/${{ inputs.project_id }}/deployments/${{ inputs.deployment_id }}/status" \
             -H "Content-Type: application/json" \
             -H "X-Internal-Key: ${{ secrets.DEVDEPLOY_INTERNAL_KEY }}" \
-            -d "{\"status\":\"FAILED\",\"data\":{\"errorMessage\":\"GitHub Actions pipeline failed. Check workflow run ${{ github.run_id }} for details.\"}}"
+            -d "{\"status\":\"FAILED\",\"data\":{\"errorMessage\":\"Pipeline failed at workflow run ${{ github.run_id }}\"}}" \
+            || echo "Warning: Could not update failure status"
