@@ -1,0 +1,162 @@
+name: Deploy Backend API
+
+# ─────────────────────────────────────────────
+# TRIGGER
+# Runs when code in apps/backend changes on main.
+# Also allows manual triggering from the GitHub UI.
+# ─────────────────────────────────────────────
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/backend/**'
+      - '.github/workflows/deploy-backend.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+
+# ─────────────────────────────────────────────
+# PERMISSIONS
+# Required for OIDC token generation.
+# id-token: write allows GitHub to mint a JWT.
+# contents: read allows checkout.
+# ─────────────────────────────────────────────
+permissions:
+  id-token: write
+  contents: read
+
+# ─────────────────────────────────────────────
+# ENVIRONMENT VARIABLES
+# Available to all jobs in this workflow.
+# ─────────────────────────────────────────────
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: devdeploy-dev-api
+  ECS_CLUSTER: devdeploy-dev-cluster
+  ECS_SERVICE: devdeploy-dev-api-service
+  CONTAINER_NAME: api
+
+jobs:
+  # ─────────────────────────────────────────────
+  # JOB 1: BUILD AND PUSH
+  # ─────────────────────────────────────────────
+  build-and-push:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+
+    outputs:
+      image: ${{ steps.build-image.outputs.image }}
+
+    steps:
+      # Step 1 — Checkout the code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2 — Authenticate to AWS using OIDC
+      # This is the key step — no secrets stored in GitHub
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Step 3 — Authenticate Docker to ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Step 4 — Set up Docker Buildx for efficient builds
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Step 5 — Build and push the Docker image
+      # Tags the image with:
+      #   - The git commit SHA (immutable reference)
+      #   - 'latest' (mutable, always points to newest)
+      - name: Build and push Docker image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          docker buildx build \
+            --platform linux/amd64 \
+            --push \
+            --cache-from type=registry,ref=$ECR_REGISTRY/$ECR_REPOSITORY:cache \
+            --cache-to type=registry,ref=$ECR_REGISTRY/$ECR_REPOSITORY:cache,mode=max \
+            --tag $IMAGE_URI \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            --build-arg COMMIT_SHA=${{ github.sha }} \
+            --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+            -f apps/backend/Dockerfile \
+            apps/backend
+
+          echo "image=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+  # ─────────────────────────────────────────────
+  # JOB 2: DEPLOY TO ECS
+  # Runs only after build-and-push succeeds
+  # ─────────────────────────────────────────────
+  deploy:
+    name: Deploy to ECS
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: dev
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Download the current task definition from ECS
+      # This ensures we are always modifying the latest version
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ env.ECS_SERVICE }} \
+            --query taskDefinition \
+            > task-definition.json
+
+      # Replace the image URI in the task definition
+      # with the newly built image
+      - name: Update task definition with new image
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ needs.build-and-push.outputs.image }}
+
+      # Deploy the new task definition to ECS
+      # wait-for-service-stability: true means the step waits
+      # until ECS confirms the new task is healthy before succeeding
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Print deployment summary
+        run: |
+          echo "✅ Deployment successful"
+          echo "Image: ${{ needs.build-and-push.outputs.image }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Triggered by: ${{ github.actor }}"
