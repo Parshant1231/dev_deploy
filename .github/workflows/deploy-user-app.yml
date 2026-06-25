@@ -294,7 +294,9 @@ jobs:
 
           # The URL uses the Host header pattern as a subdomain-style identifier
           # In production with a real domain, this becomes a real subdomain URL
-          PUBLIC_URL="http://${{ inputs.project_id }}-${{ inputs.environment }}.${ALB_DNS}"
+          # Convert underscores to dashes to match the ALB host-header rule condition
+          PROJECT_SLUG=$(echo "${{ inputs.project_id }}" | tr '_' '-')
+          PUBLIC_URL="http://${PROJECT_SLUG}-${{ inputs.environment }}.${ALB_DNS}"
 
           echo "public_url=$PUBLIC_URL" >> $GITHUB_OUTPUT
 

@@ -10,10 +10,17 @@ function authenticateEither(req: Request, res: Response, next: NextFunction): vo
   const hasInternalKey = req.headers['x-internal-key'];
   const hasBearer = req.headers.authorization?.startsWith('Bearer ');
 
+  console.log('[authenticateEither] Headers:', {
+    'x-internal-key': hasInternalKey ? 'present' : 'missing',
+    'authorization': req.headers.authorization ? 'present' : 'missing'
+  });
+
   if (hasInternalKey) {
+    console.log('[authenticateEither] Using internal key auth');
     return authenticateInternal(req as any, res, next);
   }
   if (hasBearer) {
+    console.log('[authenticateEither] Using bearer token auth');
     return authenticate(req as any, res, next);
   }
 

@@ -238,6 +238,10 @@ resource "aws_ecs_service" "api" {
   desired_count   = 1
   launch_type     = "FARGATE"
 
+  health_check_grace_period_seconds = 60
+  force_new_deployment = false
+
+
   network_configuration {
     subnets          = var.private_subnet_ids
     security_groups  = [var.ecs_security_group_id]
