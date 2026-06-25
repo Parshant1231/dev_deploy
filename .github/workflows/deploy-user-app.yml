@@ -201,7 +201,7 @@ jobs:
         run: |
           TG_NAME="dd-${{ inputs.project_id }}-${{ inputs.environment }}"
           # ALB target group names max 32 chars
-          TG_NAME=$(echo $TG_NAME | cut -c1-32)
+          TG_NAME=$(echo $TG_NAME | tr '_' '-' | cut -c1-32)
 
           # Get VPC ID
           VPC_ID=$(aws ec2 describe-vpcs \
@@ -254,7 +254,7 @@ jobs:
         run: |
           LISTENER_ARN="${{ secrets.ALB_LISTENER_ARN }}"
           TG_ARN="${{ steps.target-group.outputs.tg_arn }}"
-          HOST_PATTERN="${{ inputs.project_id }}-${{ inputs.environment }}.*"
+          HOST_PATTERN="$(echo '${{ inputs.project_id }}' | tr '_' '-')-${{ inputs.environment }}.*"
 
           # Check if a rule already exists for this host pattern
           EXISTING_RULE_ARN=$(aws elbv2 describe-rules \
