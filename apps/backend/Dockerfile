@@ -30,7 +30,8 @@ RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev && npm cache clean --force && \
+    apk add --no-cache curl
 
 COPY --from=builder /app/dist ./dist
 
@@ -39,6 +40,6 @@ USER nodejs
 EXPOSE 3001
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-  CMD wget -qO- http://localhost:3001/health || exit 1
+  CMD curl -f http://localhost:3001/health || exit 1
 
 CMD ["node", "dist/server.js"]
