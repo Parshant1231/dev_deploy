@@ -21,17 +21,12 @@ function authenticateEither(req: Request, res: Response, next: NextFunction): vo
 }
 
 
-router.use(authenticate as any);
-
-router.post('/', deploymentsController.create as any);
-router.get('/', deploymentsController.list as any);
-router.get('/:deploymentId', deploymentsController.get as any);
-router.post('/:deploymentId/cancel', deploymentsController.cancel as any);
+// Apply authentication per-route instead of globally
+router.post('/', authenticate as any, deploymentsController.create as any);
+router.get('/', authenticate as any, deploymentsController.list as any);
+router.get('/:deploymentId', authenticate as any, deploymentsController.get as any);
+router.post('/:deploymentId/cancel', authenticate as any, deploymentsController.cancel as any);
 router.patch('/:deploymentId/status', authenticateEither as any, deploymentsController.updateStatus as any);
-// Add to deployments routes
-router.get(
-  '/:deploymentId/url',
-  deploymentsController.getUrl as any
-);
+router.get('/:deploymentId/url', authenticate as any, deploymentsController.getUrl as any);
 
 export default router;
