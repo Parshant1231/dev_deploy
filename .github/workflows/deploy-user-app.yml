@@ -191,6 +191,10 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localho
 CMD ["nginx", "-g", "daemon off;"]
 DOCKERFILE
                 ;;
+              *)
+                echo "ERROR: No Dockerfile in repo and unsupported framework: $FRAMEWORK"
+                exit 1
+                ;;
             esac
 
             echo "dockerfile_path=user-app/Dockerfile.generated" >> $GITHUB_OUTPUT
