@@ -55,6 +55,11 @@ on:
         description: 'DevDeploy API URL'
         required: true
         type: string
+      app_directory:
+        description: 'Subdirectory containing the app (leave empty for root)'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   id-token: write
@@ -117,14 +122,22 @@ jobs:
           if [ -f "user-app/Dockerfile" ]; then
             echo "Using user-provided Dockerfile"
             echo "dockerfile_path=user-app/Dockerfile" >> $GITHUB_OUTPUT
-            echo "build_context=user-app" >> $GITHUB_OUTPUT
+            BUILD_CONTEXT="user-app"
+            if [ -n "${{ inputs.app_directory }}" ]; then
+              BUILD_CONTEXT="user-app/${{ inputs.app_directory }}"
+            fi
+            echo "build_context=$BUILD_CONTEXT" >> $GITHUB_OUTPUT
           else
             case $FRAMEWORK in
               nodejs|react|nextjs|static)
                 echo "Copying template Dockerfile for: $FRAMEWORK"
                 cp .github/dockerfiles/${FRAMEWORK}.Dockerfile user-app/Dockerfile.generated
                 echo "dockerfile_path=user-app/Dockerfile.generated" >> $GITHUB_OUTPUT
-                echo "build_context=user-app" >> $GITHUB_OUTPUT
+                BUILD_CONTEXT="user-app"
+                if [ -n "${{ inputs.app_directory }}" ]; then
+                  BUILD_CONTEXT="user-app/${{ inputs.app_directory }}"
+                fi
+                echo "build_context=$BUILD_CONTEXT" >> $GITHUB_OUTPUT
                 ;;
               docker)
                 echo "ERROR: framework=docker but no Dockerfile found in repo"
