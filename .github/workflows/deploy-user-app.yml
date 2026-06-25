@@ -112,93 +112,29 @@ jobs:
       - name: Detect or generate Dockerfile
         id: dockerfile
         run: |
-          PROJECT_ID="${{ inputs.project_id }}"
           FRAMEWORK="${{ inputs.framework }}"
-          PORT="${{ inputs.port }}"
-          HEALTH_PATH="${{ inputs.health_check_path }}"
-
-          if [ -f "user-app/devdeploy.yml" ] || [ -f "user-app/devdeploy.yaml" ]; then
-            echo "devdeploy.yml found — config will be applied"
-          fi
 
           if [ -f "user-app/Dockerfile" ]; then
             echo "Using user-provided Dockerfile"
             echo "dockerfile_path=user-app/Dockerfile" >> $GITHUB_OUTPUT
             echo "build_context=user-app" >> $GITHUB_OUTPUT
           else
-            echo "Generating Dockerfile for framework: $FRAMEWORK"
-
             case $FRAMEWORK in
-              nodejs)
-                cat > user-app/Dockerfile.generated << DOCKERFILE
-            FROM node:18-alpine AS production
-            WORKDIR /app
-            COPY package*.json ./
-            RUN npm ci --only=production 2>/dev/null || npm install --only=production
-            COPY . .
-            RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
-            USER nodejs
-            EXPOSE $PORT
-            HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:${PORT}${HEALTH_PATH} || exit 1
-            CMD ["node", "index.js"]
-            DOCKERFILE
+              nodejs|react|nextjs|static)
+                echo "Copying template Dockerfile for: $FRAMEWORK"
+                cp .github/dockerfiles/${FRAMEWORK}.Dockerfile user-app/Dockerfile.generated
+                echo "dockerfile_path=user-app/Dockerfile.generated" >> $GITHUB_OUTPUT
+                echo "build_context=user-app" >> $GITHUB_OUTPUT
                 ;;
-              react)
-                cat > user-app/Dockerfile.generated << DOCKERFILE
-            FROM node:18-alpine AS builder
-            WORKDIR /app
-            COPY package*.json ./
-            RUN npm ci
-            COPY . .
-            RUN npm run build
-            FROM nginx:alpine AS production
-            COPY --from=builder /app/build /usr/share/nginx/html
-            RUN test -d /app/dist && cp -r /app/dist/* /usr/share/nginx/html/ || true
-            EXPOSE 80
-            HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:80/ || exit 1
-            CMD ["nginx", "-g", "daemon off;"]
-            DOCKERFILE
-                ;;
-              nextjs)
-                cat > user-app/Dockerfile.generated << DOCKERFILE
-            FROM node:18-alpine AS builder
-            WORKDIR /app
-            COPY package*.json ./
-            RUN npm ci
-            COPY . .
-            ENV NEXT_TELEMETRY_DISABLED=1
-            RUN npm run build
-            FROM node:18-alpine AS production
-            WORKDIR /app
-            ENV NODE_ENV=production
-            ENV NEXT_TELEMETRY_DISABLED=1
-            RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
-            COPY --from=builder --chown=nodejs:nodejs /app/.next/standalone ./
-            COPY --from=builder --chown=nodejs:nodejs /app/.next/static ./.next/static
-            COPY --from=builder --chown=nodejs:nodejs /app/public ./public 2>/dev/null || true
-            USER nodejs
-            EXPOSE $PORT
-            HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:${PORT}/api/health || exit 1
-            CMD ["node", "server.js"]
-            DOCKERFILE
-                ;;
-              static)
-                cat > user-app/Dockerfile.generated << DOCKERFILE
-            FROM nginx:alpine
-            COPY . /usr/share/nginx/html
-            EXPOSE 80
-            HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:80/ || exit 1
-            CMD ["nginx", "-g", "daemon off;"]
-            DOCKERFILE
+              docker)
+                echo "ERROR: framework=docker but no Dockerfile found in repo"
+                exit 1
                 ;;
               *)
-                echo "ERROR: No Dockerfile in repo and unsupported framework: $FRAMEWORK"
+                echo "ERROR: Unsupported framework: $FRAMEWORK"
                 exit 1
                 ;;
             esac
-
-            echo "dockerfile_path=user-app/Dockerfile.generated" >> $GITHUB_OUTPUT
-            echo "build_context=user-app" >> $GITHUB_OUTPUT
           fi
 
       # ─────────────────────────────────────────────
