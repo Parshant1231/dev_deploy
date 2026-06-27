@@ -203,11 +203,18 @@ jobs:
           # ALB target group names max 32 chars
           TG_NAME=$(echo $TG_NAME | tr '_' '-' | cut -c1-32)
 
-          # Get VPC ID
-          VPC_ID=$(aws ec2 describe-vpcs \
-            --filters "Name=tag:Name,Values=devdeploy-dev-vpc" \
-            --query 'Vpcs[0].VpcId' \
+          # Get VPC ID directly from the ALB — guarantees target group is in the same VPC
+          ALB_ARN=$(aws elbv2 describe-listeners \
+            --listener-arns "${{ secrets.ALB_LISTENER_ARN }}" \
+            --query 'Listeners[0].LoadBalancerArn' \
             --output text)
+
+          VPC_ID=$(aws elbv2 describe-load-balancers \
+            --load-balancer-arns "$ALB_ARN" \
+            --query 'LoadBalancers[0].VpcId' \
+            --output text)
+
+          echo "Using VPC: $VPC_ID (derived from ALB)"
 
           # Check if target group already exists
           EXISTING_TG_ARN=$(aws elbv2 describe-target-groups \
