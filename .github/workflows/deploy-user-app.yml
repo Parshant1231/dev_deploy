@@ -83,9 +83,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.repo_full_name }}
-          ref: ${{ inputs.commit_sha }}
+          ref: ${{ inputs.commit_sha != 'null' && inputs.commit_sha || 'HEAD' }}
           path: user-app
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_PAT }}
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
