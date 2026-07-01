@@ -17,6 +17,7 @@ export const linkRepoSchema = z.object({
   repoFullName: z.string().min(1), // e.g. "username/repo-name"
   repoUrl: z.string().url(),
   branch: z.string().min(1).default('main'),
+  appDirectory: z.string().optional(), // e.g. "apps/sample-app" for monorepos
 });
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;

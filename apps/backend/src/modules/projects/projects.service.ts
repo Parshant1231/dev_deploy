@@ -70,12 +70,14 @@ export class ProjectsService {
       repoFullName: input.repoFullName,
       repoUrl: input.repoUrl,
       branch: input.branch,
+      appDirectory: input.appDirectory,
     });
     return {
       ...project,
       repoFullName: input.repoFullName,
       repoUrl: input.repoUrl,
       branch: input.branch,
+      appDirectory: input.appDirectory,
     };
   }
 
