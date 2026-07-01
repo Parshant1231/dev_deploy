@@ -41,3 +41,13 @@ output "alb_listener_arn" {
   description = "ALB listener ARN for dynamic rule creation"
   value       = module.compute.alb_listener_arn
 }
+
+output "event_bus_name" {
+  description = "EventBridge event bus name"
+  value       = module.storage.event_bus_name
+}
+
+output "event_bus_arn" {
+  description = "EventBridge event bus ARN"
+  value       = module.storage.event_bus_arn
+}
