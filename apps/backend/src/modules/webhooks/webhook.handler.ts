@@ -4,7 +4,9 @@ import { config } from '../../config/env';
 import { DeploymentsService } from '../deployments/deployments.service';
 import { ProjectsRepository } from '../projects/projects.repository';
 import { AppError } from '../../shared/errors/AppError';
+import { OrchestratorService } from '../orchestrator/orchestrator.service';
 
+const orchestratorService = new OrchestratorService();
 const deploymentsService = new DeploymentsService();
 const projectsRepo = new ProjectsRepository();
 
@@ -117,40 +119,25 @@ async function handlePushEvent(payload: GithubPushPayload): Promise<void> {
     const commitSha = payload.after;
     const commitMessage = payload.head_commit?.message ?? 'No commit message';
 
-    console.log(`Push event received: ${repoFullName} @ ${branch} (${commitSha.slice(0, 7)})`);
-
-    // Find which DevDeploy projects are connected to this repository
-    // and configured to deploy from this branch.
-    // In a production system this would query a GSI on repoFullName.
-    // For now we scan — acceptable at this scale, fix in Phase 10.
-    const matchingProjects = await findProjectsByRepo(repoFullName, branch);
-
-    if (matchingProjects.length === 0) {
-      console.log(`No projects found for ${repoFullName}@${branch} — skipping`);
+    // Filter out branch deletions
+    // When a branch is deleted, 'after' is all zeros
+    if (commitSha === '0000000000000000000000000000000000000000') {
+      console.log(`Branch deletion event for ${repoFullName}@${branch} — skipping`);
       return;
     }
 
-    // Create a deployment record for each matching project
-    for (const project of matchingProjects) {
-      try {
-        await deploymentsService.createDeployment(
-          project.userId,
-          project.projectId,
-          {
-            environment: 'dev',
-            commitSha,
-            commitMessage,
-          }
-        );
-        console.log(`Deployment created for project ${project.projectId}`);
-      } catch (error) {
-        // If a deployment is already in progress, log and skip
-        console.error(
-          `Failed to create deployment for project ${project.projectId}:`,
-          error
-        );
-      }
-    }
+    console.log(
+      `Push event: ${repoFullName}@${branch} ` +
+      `commit=${commitSha.slice(0, 7)} ` +
+      `message="${commitMessage.split('\n')[0]}"`
+    );
+
+    await orchestratorService.handlePushEvent({
+      repoFullName,
+      branch,
+      commitSha,
+      commitMessage: commitMessage.split('\n')[0], // First line only
+    });
   } catch (error) {
     console.error('Error handling push event:', error);
   }
