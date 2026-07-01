@@ -44,3 +44,6 @@ Thumbs.db
 
 # Docker
 .docker/
+
+# Local testing and reference docs (do not commit)
+API_TESTING.md

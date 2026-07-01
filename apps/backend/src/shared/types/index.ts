@@ -28,6 +28,7 @@ export interface Project {
   buildCommand?: string;
   startCommand?: string;
   port: number;
+  appDirectory?: string;   // subdirectory within the repo (e.g. "apps/sample-app")
   envVars?: Record<string, string>;
   createdAt: string;
   updatedAt: string;

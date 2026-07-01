@@ -516,6 +516,7 @@ resource "aws_iam_role_policy" "github_actions" {
         "elasticloadbalancing:DescribeRules",
         "elasticloadbalancing:ModifyRule",
         "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeListeners",
         "elasticloadbalancing:RegisterTargets",
         "elasticloadbalancing:DeregisterTargets",
         "elasticloadbalancing:DescribeTargetHealth"

@@ -52,4 +52,19 @@ export const config = {
 
   // Frontend URL for CORS
   frontendUrl: optionalEnv('FRONTEND_URL', 'http://localhost:3000'),
+
+  // EventBridge
+  eventBridgeBusName: optionalEnv('EVENTBRIDGE_BUS_NAME', 'devdeploy-dev-events'),
+
+  // GitHub — DevDeploy repository (where workflows live)
+  devdeployRepoOwner: requireEnv('DEVDEPLOY_REPO_OWNER'),
+  devdeployRepoName: optionalEnv('DEVDEPLOY_REPO_NAME', 'devdeploy'),
+
+  // Public API URL (sent to GitHub Actions as api_url input)
+  apiPublicUrl: requireEnv('API_PUBLIC_URL'),
+
+  // Retry configuration
+  maxDeploymentRetries: parseInt(optionalEnv('MAX_DEPLOYMENT_RETRIES', '3'), 10),
+  retryBaseDelayMs: parseInt(optionalEnv('RETRY_BASE_DELAY_MS', '30000'), 10),
+
 } as const;
