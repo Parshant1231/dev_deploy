@@ -347,3 +347,81 @@ resource "aws_ecr_lifecycle_policy" "user_apps" {
     ]
   })
 }
+
+# ─────────────────────────────────────────────
+# EVENTBRIDGE CUSTOM EVENT BUS
+#
+# All DevDeploy deployment events are published here.
+# EventBridge rules route events to subscribers:
+#   - CloudWatch Logs (always — for audit trail)
+#   - Lambda (Phase 7 — auto-destroy trigger)
+#   - SNS (Phase 9 — notifications)
+#
+# Using a custom bus isolates DevDeploy events from
+# AWS service events on the default bus.
+# ─────────────────────────────────────────────
+
+resource "aws_cloudwatch_event_bus" "devdeploy" {
+  name = "${var.project_name}-${var.environment}-events"
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-events"
+  }
+}
+
+# ─────────────────────────────────────────────
+# EVENTBRIDGE RULE — Route all events to CloudWatch
+#
+# This rule captures every event published to the bus
+# and sends it to a CloudWatch log group.
+# This creates a permanent, queryable audit trail.
+# ─────────────────────────────────────────────
+
+resource "aws_cloudwatch_event_rule" "all_events_to_logs" {
+  name           = "${var.project_name}-${var.environment}-all-events"
+  description    = "Route all DevDeploy events to CloudWatch for audit logging"
+  event_bus_name = aws_cloudwatch_event_bus.devdeploy.name
+
+  # Match every event published to this bus
+  event_pattern = jsonencode({
+    source = ["devdeploy.deployments"]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "event_bus_logs" {
+  name              = "/devdeploy/${var.environment}/events"
+  retention_in_days = 30
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-event-logs"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "events_to_logs" {
+  rule           = aws_cloudwatch_event_rule.all_events_to_logs.name
+  event_bus_name = aws_cloudwatch_event_bus.devdeploy.name
+  target_id      = "SendToCloudWatch"
+  arn            = aws_cloudwatch_log_group.event_bus_logs.arn
+}
+
+# Allow EventBridge to write to the CloudWatch log group
+resource "aws_cloudwatch_log_resource_policy" "eventbridge_logs" {
+  policy_name = "${var.project_name}-${var.environment}-eventbridge-logs"
+
+  policy_document = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "events.amazonaws.com"
+        }
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "${aws_cloudwatch_log_group.event_bus_logs.arn}:*"
+      }
+    ]
+  })
+}
