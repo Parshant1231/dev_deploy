@@ -3,6 +3,15 @@ import { ProjectsRepository } from '../projects/projects.repository';
 import { AppError } from '../../shared/errors/AppError';
 import { generateId } from '../../shared/utils/id';
 import { Environment } from '../../shared/types';
+import {
+  LambdaClient,
+  InvokeCommand,
+  InvocationType,
+} from '@aws-sdk/client-lambda';
+import { config } from '../../config/env';
+
+// Add Lambda client
+const lambdaClient = new LambdaClient({ region: config.awsRegion });
 
 export class EnvironmentsService {
   private readonly repo = new EnvironmentsRepository();
@@ -63,15 +72,46 @@ export class EnvironmentsService {
     userId: string
   ): Promise<void> {
     const project = await this.projectsRepo.findById(projectId);
-    if (!project || project.userId !== userId) throw AppError.forbidden('Access denied');
+    if (!project || project.userId !== userId) {
+      throw AppError.forbidden('Access denied');
+    }
 
     const environment = await this.repo.findById(environmentId, projectId);
     if (!environment) throw AppError.notFound('Environment not found');
     if (environment.status === 'DESTROYED') {
       throw AppError.badRequest('Environment is already destroyed');
     }
+    if (environment.status === 'DESTROYING') {
+      throw AppError.badRequest('Environment is already being destroyed');
+    }
 
+    // Mark as DESTROYING immediately
     await this.repo.updateStatus(environmentId, projectId, 'DESTROYING');
-    // Phase 7 Lambda will pick this up and complete the teardown
+
+    // Invoke Lambda asynchronously for immediate cleanup
+    // Event invocation = fire and forget (Lambda runs after API responds)
+    if (config.autoDestroyFunctionName) {
+      try {
+        await lambdaClient.send(
+          new InvokeCommand({
+            FunctionName:   config.autoDestroyFunctionName,
+            InvocationType: InvocationType.Event, // Async — does not wait for response
+            Payload: Buffer.from(
+              JSON.stringify({
+                source:          'api-manual-destroy',
+                environmentId,
+                projectId,
+                forceImmediate:  true,
+              })
+            ),
+          })
+        );
+        console.log(`Lambda invoked for immediate destroy of ${environmentId}`);
+      } catch (error) {
+        // Lambda invoke failure does not break the API response.
+        // The scheduler will pick it up within 15 minutes.
+        console.error('Lambda invoke failed — scheduler will clean up:', error);
+      }
+    }
   }
 }
