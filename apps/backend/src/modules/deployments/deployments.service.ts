@@ -1,3 +1,6 @@
+// Add this import at the top
+import { publishStatusChange, DeploymentEventType } from '../../aws/eventbridge';
+import { EventsService } from '../events/events.service';
 import { DeploymentsRepository } from './deployments.repository';
 import { ProjectsRepository } from '../projects/projects.repository';
 import { AppError } from '../../shared/errors/AppError';
@@ -7,6 +10,25 @@ import { Deployment, DeploymentStatus } from '../../shared/types';
 export class DeploymentsService {
   private readonly repo = new DeploymentsRepository();
   private readonly projectsRepo = new ProjectsRepository();
+  // Add eventsService to the class
+  private readonly eventsService = new EventsService();
+
+  // ─────────────────────────────────────────────
+  // Map deployment status to EventBridge event type
+  // ─────────────────────────────────────────────
+  private statusToEventType(status: DeploymentStatus): DeploymentEventType {
+    const mapping: Record<DeploymentStatus, DeploymentEventType> = {
+      PENDING:       'DeploymentCreated',
+      BUILDING:      'DeploymentBuildStarted',
+      PUSHING_IMAGE: 'DeploymentPushStarted',
+      DEPLOYING:     'DeploymentDeployStarted',
+      RUNNING:       'DeploymentRunning',
+      FAILED:        'DeploymentFailed',
+      CANCELLED:     'DeploymentCancelled',
+      DESTROYED:     'EnvironmentDestroyed',
+    };
+    return mapping[status];
+  }
 
   async createDeployment(
     userId: string,
@@ -99,6 +121,9 @@ export class DeploymentsService {
     return { url, status: deployment.status };
   }
 
+ // ─────────────────────────────────────────────
+  // Update the existing updateDeploymentStatus method
+  // ─────────────────────────────────────────────
   async updateDeploymentStatus(
     deploymentId: string,
     projectId: string,
@@ -108,9 +133,34 @@ export class DeploymentsService {
     const deployment = await this.repo.findById(deploymentId, projectId);
     if (!deployment) throw AppError.notFound('Deployment not found');
 
-    this.validateTransition(deployment.status, status);
+    const previousStatus = deployment.status;
+    this.validateTransition(previousStatus, status);
 
     await this.repo.updateStatus(deploymentId, projectId, status, additionalData);
+
+    // Record to events table
+    await this.eventsService.record({
+      deploymentId,
+      projectId,
+      userId: deployment.userId,
+      type: `DEPLOYMENT_${status}` as any,
+      previousStatus,
+      newStatus: status,
+      message: `Deployment status changed: ${previousStatus} → ${status}`,
+      metadata: additionalData,
+    });
+
+    // Publish to EventBridge
+    await publishStatusChange({
+      deploymentId,
+      projectId,
+      userId: deployment.userId,
+      environment: deployment.environment,
+      previousStatus,
+      newStatus: status,
+      eventType: this.statusToEventType(status),
+      metadata: additionalData,
+    });
   }
 
   async cancelDeployment(
