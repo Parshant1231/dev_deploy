@@ -389,7 +389,8 @@ jobs:
         id: ecs-service
         run: |
           SERVICE_NAME="dd-${{ inputs.project_id }}-${{ inputs.environment }}"
-          SERVICE_NAME=$(echo $SERVICE_NAME | cut -c1-36)
+          # ECS service names only allow alphanumeric and hyphens — same rule as ALB target groups
+          SERVICE_NAME=$(echo $SERVICE_NAME | tr '_' '-' | cut -c1-36)
           TG_ARN="${{ steps.target-group.outputs.tg_arn }}"
 
           SUBNET_IDS=$(aws ec2 describe-subnets \
