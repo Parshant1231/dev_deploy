@@ -1,0 +1,10 @@
+variable "project_name"          { type = string }
+variable "environment"           { type = string }
+variable "aws_region"            { type = string }
+variable "aws_account_id"        { type = string }
+variable "lambda_role_arn"       { type = string }
+variable "ecs_cluster_name"      { type = string }
+variable "event_bus_name"        { type = string }
+variable "environments_table_name" { type = string }
+variable "deployments_table_name"  { type = string }
+variable "events_table_name"       { type = string }    
