@@ -120,3 +120,24 @@ module "monitoring" {
   environment  = var.environment
   aws_region   = var.aws_region
 }
+
+# ─────────────────────────────────────────────
+# MODULE: LAMBDA
+# ─────────────────────────────────────────────
+
+module "lambda" {
+  source = "../../modules/lambda"
+
+  project_name    = var.project_name
+  environment     = var.environment
+  aws_region      = var.aws_region
+  aws_account_id  = var.aws_account_id
+
+  lambda_role_arn  = module.security.lambda_role_arn
+  ecs_cluster_name = module.compute.ecs_cluster_name
+  event_bus_name   = module.storage.event_bus_name
+
+  environments_table_name = module.storage.dynamodb_table_names["environments"]
+  deployments_table_name  = module.storage.dynamodb_table_names["deployments"]
+  events_table_name       = module.storage.dynamodb_table_names["events"]
+}

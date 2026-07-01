@@ -51,3 +51,7 @@ output "event_bus_arn" {
   description = "EventBridge event bus ARN"
   value       = module.storage.event_bus_arn
 }
+
+output "auto_destroy_function_name" {
+  value = module.lambda.auto_destroy_function_name
+}
