@@ -342,9 +342,42 @@ resource "aws_iam_role_policy" "lambda_policy" {
           "ecs:DeleteService",
           "ecs:DescribeServices",
           "ecs:StopTask",
-          "ecs:ListTasks"
+          "ecs:ListTasks",
+          "ecs:DescribeTasks"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "ALBCleanup"
+        Effect = "Allow"
+        Action = [
+          "elasticloadbalancing:DeleteRule",
+          "elasticloadbalancing:DeleteTargetGroup",
+          "elasticloadbalancing:DescribeRules",
+          "elasticloadbalancing:DescribeTargetGroups",
+          "elasticloadbalancing:DescribeTargetHealth",
+          "elasticloadbalancing:DeregisterTargets",
+          "elasticloadbalancing:ModifyRule"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "EventBridgePublish"
+        Effect = "Allow"
+        Action = ["events:PutEvents"]
+        Resource = [
+          "arn:aws:events:${var.aws_region}:${var.aws_account_id}:event-bus/devdeploy-*"
+        ]
+      },
+      {
+        Sid    = "CloudWatchLogs"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/devdeploy-*"
       }
     ]
   })
