@@ -95,7 +95,7 @@ const githubCallback: RequestHandler = async (req, res, next) => {
     }
 
     await authService.connectGithub(String(state), String(code));
-    res.redirect(`${config.frontendUrl}/settings/github?connected=true`);
+    res.redirect(`${config.frontendUrl}/settings?connected=true`);
   } catch (error) {
     next(error);
   }

@@ -103,14 +103,27 @@ export class OrchestratorService {
       );
     }
 
-    // ── Step 4: Load user (for GitHub token) ──
+    // ── Step 4: Load user — verify they exist ─
     const user = await this.authRepo.findById(userId);
     if (!user) throw AppError.notFound('User not found');
 
-    if (!user.githubToken) {
+    // Use the platform-level GitHub token (Parshant1231's PAT stored in .env)
+    // to trigger workflows. This means ANY logged-in user can deploy without
+    // needing to connect their own GitHub account.
+    // Fall back to the user's own token only if the platform token isn't set.
+    let githubToken: string;
+    if (config.devdeployGithubToken) {
+      // Platform token is a plain PAT from .env — encrypt it on the fly
+      // so createGithubClient (which always decrypts) works correctly.
+      const { encryptToken } = await import('../../shared/utils/crypto');
+      githubToken = encryptToken(config.devdeployGithubToken);
+    } else if (user.githubToken) {
+      // Fall back to the user's own stored (already-encrypted) token
+      githubToken = user.githubToken;
+    } else {
       throw AppError.badRequest(
-        'GitHub account not connected. ' +
-        'Connect your GitHub account in settings to enable deployments.'
+        'Deployment pipeline is not configured. ' +
+        'Ask the platform admin to set DEVDEPLOY_GITHUB_TOKEN in the server environment.'
       );
     }
 
@@ -160,7 +173,13 @@ export class OrchestratorService {
     // ── Step 9: Trigger GitHub Actions ────────
     // This runs asynchronously after returning the deployment.
     // If it fails, the deployment stays PENDING and can be retried.
-    this.triggerPipeline(deployment, project, user.githubToken).catch(
+    // Decrypt the user's token to pass as repo_token for the checkout step.
+    const { decryptToken } = await import('../../shared/utils/crypto');
+    const userRepoToken = user.githubToken
+      ? decryptToken(user.githubToken)
+      : config.devdeployGithubToken;
+
+    this.triggerPipeline(deployment, project, githubToken, userRepoToken).catch(
       async (error) => {
         console.error('Pipeline trigger failed:', error);
         await this.handlePipelineFailure(deployment, error.message);
@@ -178,7 +197,8 @@ export class OrchestratorService {
   private async triggerPipeline(
     deployment: Deployment,
     project: Project,
-    encryptedGithubToken: string
+    encryptedGithubToken: string,
+    userRepoToken?: string  // plain token for checking out the user's repo
   ): Promise<void> {
     const githubClient = createGithubClient(encryptedGithubToken);
 
@@ -198,6 +218,9 @@ export class OrchestratorService {
         memory: '512',
         api_url: config.apiPublicUrl,
         app_directory: project.appDirectory ?? '',
+        // Pass the user's own token so the workflow can checkout their repo.
+        // Falls back to the platform token if the user hasn't connected GitHub.
+        repo_token: userRepoToken ?? config.devdeployGithubToken,
       },
     });
 
@@ -393,11 +416,22 @@ export class OrchestratorService {
 
     // Trigger the pipeline with the existing image URI
     const user = await this.authRepo.findById(userId);
-    if (!user?.githubToken) throw AppError.badRequest('GitHub not connected');
+    let rollbackToken: string;
+    if (config.devdeployGithubToken) {
+      const { encryptToken } = await import('../../shared/utils/crypto');
+      rollbackToken = encryptToken(config.devdeployGithubToken);
+    } else if (user?.githubToken) {
+      rollbackToken = user.githubToken;
+    } else {
+      throw AppError.badRequest('Deployment pipeline not configured. Set DEVDEPLOY_GITHUB_TOKEN.');
+    }
 
-    // For rollback, we skip build + push in the pipeline
-    // by passing the existing imageUri directly
-    const githubClient = createGithubClient(user.githubToken);
+    const githubClient = createGithubClient(rollbackToken);
+
+    const { decryptToken } = await import('../../shared/utils/crypto');
+    const rollbackUserToken = user?.githubToken
+      ? decryptToken(user.githubToken)
+      : config.devdeployGithubToken;
 
     await triggerWorkflowDispatch(githubClient, {
       devdeployRepoOwner: config.devdeployRepoOwner,
@@ -415,6 +449,7 @@ export class OrchestratorService {
         memory: '512',
         api_url: config.apiPublicUrl,
         app_directory: project.appDirectory ?? '',
+        repo_token: rollbackUserToken,
       },
     });
 

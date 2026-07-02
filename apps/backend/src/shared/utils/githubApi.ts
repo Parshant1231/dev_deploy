@@ -55,6 +55,7 @@ export interface WorkflowDispatchInputs {
   memory: string;
   api_url: string;
   app_directory: string;
+  repo_token: string; // User's plain GitHub token — used to checkout their repo
 }
 
 export async function triggerWorkflowDispatch(

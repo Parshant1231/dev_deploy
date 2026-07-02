@@ -60,11 +60,19 @@ export const config = {
   devdeployRepoOwner: requireEnv('DEVDEPLOY_REPO_OWNER'),
   devdeployRepoName: optionalEnv('DEVDEPLOY_REPO_NAME', 'devdeploy'),
 
+  // Server-side GitHub token (Parshant1231's PAT) used to trigger workflows.
+  // This is a platform secret — individual users do NOT need to connect GitHub
+  // just to trigger deployments. They only need their own token for repo access.
+  devdeployGithubToken: optionalEnv('DEVDEPLOY_GITHUB_TOKEN', ''),
+
   // Public API URL (sent to GitHub Actions as api_url input)
   apiPublicUrl: requireEnv('API_PUBLIC_URL'),
 
   // Retry configuration
   maxDeploymentRetries: parseInt(optionalEnv('MAX_DEPLOYMENT_RETRIES', '3'), 10),
   retryBaseDelayMs: parseInt(optionalEnv('RETRY_BASE_DELAY_MS', '30000'), 10),
+
+  // Lambda auto-destroy function name
+  autoDestroyFunctionName: optionalEnv('AUTO_DESTROY_FUNCTION_NAME', ''),
 
 } as const;
