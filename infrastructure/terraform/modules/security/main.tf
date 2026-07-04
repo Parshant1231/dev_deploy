@@ -209,6 +209,26 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
         Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/devdeploy/*"
       },
       {
+        Sid    = "CloudWatchLogsInsights"
+        Effect = "Allow"
+        Action = [
+          "logs:StartQuery",
+          "logs:GetQueryResults",
+          "logs:StopQuery",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "CloudWatchMetricsPublish"
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricData"
+        ]
+        Resource = "*"
+      },
+      {
         Sid    = "ECRAccess"
         Effect = "Allow"
         Action = [
