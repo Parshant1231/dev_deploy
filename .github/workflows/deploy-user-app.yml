@@ -90,9 +90,10 @@ jobs:
           repository: ${{ inputs.repo_full_name }}
           ref: ${{ inputs.commit_sha != 'null' && inputs.commit_sha || 'HEAD' }}
           path: user-app
-          # Use the token passed from the backend (user's own token).
-          # Falls back to GH_PAT secret if not provided.
-          token: ${{ inputs.repo_token != '' && inputs.repo_token || secrets.GH_PAT }}
+          # repo_token is the user's own GitHub token passed from the backend.
+          # It must have access to the user's repo (public or private).
+          # GH_PAT is only used as a fallback when repo_token is not provided.
+          token: ${{ inputs.repo_token || secrets.GH_PAT }}
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
