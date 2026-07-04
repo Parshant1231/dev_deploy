@@ -53,3 +53,4 @@ TOKEN_FLOW_DIAGRAM.txt
 WHAT_TO_EXPECT.md
 test_all.sh
 /tmp/
+infrastructure/terraform/modules/lambda/auto-destroy.zip
