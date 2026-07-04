@@ -116,9 +116,13 @@ module "compute" {
 module "monitoring" {
   source = "../../modules/monitoring"
 
-  project_name = var.project_name
-  environment  = var.environment
-  aws_region   = var.aws_region
+  project_name      = var.project_name
+  environment       = var.environment
+  aws_region        = var.aws_region
+  alert_email       = var.alert_email
+  ecs_cluster_name  = module.compute.ecs_cluster_name
+  api_service_name  = module.compute.api_service_name
+  alb_arn_suffix    = module.compute.alb_arn_suffix
 }
 
 # ─────────────────────────────────────────────

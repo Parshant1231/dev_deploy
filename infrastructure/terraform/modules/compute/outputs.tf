@@ -22,3 +22,8 @@ output "alb_listener_arn" {
   description = "ALB HTTP listener ARN — used by pipeline to create listener rules"
   value       = aws_lb_listener.http.arn
 }
+
+output "alb_arn_suffix" {
+  description = "ALB ARN suffix in the format CloudWatch dimensions require"
+  value       = aws_lb.main.arn_suffix
+}
