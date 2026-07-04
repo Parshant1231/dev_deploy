@@ -13,3 +13,8 @@ output "lambda_log_group_name" {
 output "dashboard_name" {
   value = aws_cloudwatch_dashboard.main.dashboard_name
 }
+
+output "sns_alerts_topic_arn" {
+  description = "SNS topic ARN for deployment and infrastructure alerts"
+  value       = aws_sns_topic.alerts.arn
+}
