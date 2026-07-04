@@ -15,12 +15,10 @@ export function DeployButton({ projectId }: { projectId: string }) {
     setError(null);
     setIsDeploying(true);
     try {
-      // In a real flow, commitSha comes from the latest commit on the branch.
-      // For manual deploys without a webhook, we use a placeholder
-      // that the pipeline resolves to HEAD of the configured branch.
+      // commitSha is intentionally omitted here — the backend will resolve
+      // the real SHA from the project's configured branch via the GitHub API.
       const deployment = await deploymentsApi.trigger(projectId, {
         environment: 'dev',
-        commitSha: 'HEAD',
         commitMessage: 'Manual deployment',
       });
       router.push(`/dashboard/projects/${projectId}/deployments/${deployment.deploymentId}`);

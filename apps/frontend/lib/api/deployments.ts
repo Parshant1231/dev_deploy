@@ -18,7 +18,7 @@ export const deploymentsApi = {
 
   async trigger(
     projectId: string,
-    params: { environment: string; commitSha: string; commitMessage: string }
+    params: { environment: string; commitSha?: string; commitMessage: string }
   ): Promise<Deployment> {
     const { data } = await apiClient.post<ApiResponse<Deployment>>(
       `/projects/${projectId}/deploy`,
