@@ -47,3 +47,9 @@ Thumbs.db
 
 # Local testing and reference docs (do not commit)
 API_TESTING.md
+DEPLOYMENT_FIX_SUMMARY.txt
+TOKEN_FIX_EXPLANATION.md
+TOKEN_FLOW_DIAGRAM.txt
+WHAT_TO_EXPECT.md
+test_all.sh
+/tmp/
