@@ -1,199 +1,779 @@
-# DevDeploy
+# DevDeploy — Platform as a Service for Deploying Applications
 
-Self-service deployment platform that takes a GitHub repository to a running containerized app on AWS: build with GitHub Actions, push to Amazon ECR, deploy to ECS Fargate behind an Application Load Balancer. Includes a web dashboard, deployment tracking, and automatic cleanup.
+A self-service deployment platform similar to Render, Railway, and Vercel. Connect a GitHub repository, and DevDeploy automatically builds Docker images, pushes them to AWS ECR, and deploys to AWS ECS with a single click.
 
-## Features
+---
 
-- GitHub repository integration
-- Declarative config via `devdeploy.yml`
-- Automated build and deploy with GitHub Actions
-- Docker image builds published to Amazon ECR
-- ECS Fargate deployments behind an ALB
-- Deployment orchestration and status tracking
-- Auto-destroy / cleanup workflows
-- Next.js dashboard for apps and deployments
-- Auth, validation, and secured API middleware
-- CloudWatch observability
-- Infrastructure as code with Terraform
+## Table of Contents
+
+1. [What is DevDeploy?](#what-is-devdeploy)
+2. [Architecture](#architecture)
+3. [Quick Start](#quick-start)
+   - [Prerequisites](#prerequisites)
+   - [Local Development Setup](#local-development-setup)
+   - [Deploy to AWS](#deploy-to-aws)
+4. [Security Setup](#security-setup)
+5. [Complete Workflow](#complete-workflow)
+6. [Troubleshooting](#troubleshooting)
+
+---
+
+## What is DevDeploy?
+
+DevDeploy is a deployment orchestration platform that:
+
+- **Connects to GitHub** — OAuth integration to authenticate users
+- **Manages Projects** — Users create projects linked to GitHub repositories
+- **Orchestrates Deployments** — Triggers build pipelines via GitHub Actions
+- **Builds & Pushes** — Automatically builds Docker images and pushes to AWS ECR
+- **Deploys to ECS** — Deploys containers to AWS ECS Fargate with load balancing
+- **Manages Secrets** — Stores encryption keys and OAuth credentials in AWS Secrets Manager
+- **Provides Dashboard** — Web UI to view projects, deployments, and metrics
+
+**Tech Stack:**
+- **Frontend:** Next.js + TypeScript + Tailwind CSS
+- **Backend:** Node.js + Express + TypeScript
+- **Infrastructure:** AWS (ECS, ECR, DynamoDB, Secrets Manager, ALB, Lambda)
+- **IaC:** Terraform
+- **CI/CD:** GitHub Actions
+- **Databases:** DynamoDB for persistent data storage
+
+---
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    Dev[Developer] -->|git push| GH[GitHub Actions]
-    GH -->|docker build + push| ECR[(Amazon ECR)]
-    GH -->|update service| ECS
-
-    subgraph VPC[AWS VPC]
-        subgraph Public[Public subnets]
-            ALB[Application Load Balancer]
-            NAT[NAT Gateway]
-        end
-        subgraph Private[Private subnets]
-            ECS[ECS Fargate tasks]
-        end
-        ALB -->|HTTP, health-checked| ECS
-        ECS --> NAT
-    end
-
-    User[End users] --> ALB
-    ECS --> CW[CloudWatch Logs & Metrics]
-    ECR -.->|image pull| ECS
-    EB[EventBridge] --> L[Lambda: cleanup / automation]
-    L --> ECS
-    API[DevDeploy API] --> DDB[(DynamoDB)]
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     DevDeploy Platform                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌──────────────┐         ┌──────────────┐                    │
+│  │   Frontend   │────────▶│  Backend API │                    │
+│  │  (Next.js)   │         │  (Express)   │                    │
+│  └──────────────┘         └──────────────┘                    │
+│                                  │                             │
+│                    ┌─────────────┼─────────────┐               │
+│                    │             │             │               │
+│                    ▼             ▼             ▼               │
+│            ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ │
+│            │  DynamoDB    │ │   Secrets    │ │  Eventbridge │ │
+│            │  (Users,     │ │  Manager     │ │  (Events)    │ │
+│            │  Projects,   │ │ (Encrypted   │ │              │ │
+│            │  Deployments)│ │  Secrets)    │ │              │ │
+│            └──────────────┘ └──────────────┘ └──────────────┘ │
+│                                  │                             │
+│        ┌────────────────────────┴────────────────────────┐    │
+│        │   GitHub Actions Workflow (CI/CD Pipeline)      │    │
+│        │  ┌──────────────────────────────────────────┐  │    │
+│        │  │ 1. Build Docker image                    │  │    │
+│        │  │ 2. Push to ECR                           │  │    │
+│        │  │ 3. Update ECS task definition            │  │    │
+│        │  │ 4. Deploy to ECS Fargate                 │  │    │
+│        │  │ 5. Report status back to API             │  │    │
+│        │  └──────────────────────────────────────────┘  │    │
+│        └──────────────────────────────────────────────────┘    │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │         AWS Infrastructure (Terraform)                  │  │
+│  │                                                          │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │  │
+│  │  │     ALB      │  │   ECS        │  │     ECR      │  │  │
+│  │  │ (Load        │─▶│  (Container  │◀─│  (Image      │  │  │
+│  │  │  Balancer)   │  │  Orchestrator)  │  Registry)   │  │  │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘  │  │
+│  │                                                          │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-| Layer | Technology |
-|-------|------------|
-| Frontend | Next.js, React, TypeScript, Tailwind CSS |
-| Backend | Node.js, Express, TypeScript |
-| Infrastructure | AWS, Terraform |
-| CI/CD | GitHub Actions, Docker |
-| Database | DynamoDB |
-| Runtime | ECS Fargate (private subnets) |
-| Registry | ECR |
-| Load balancing | ALB (public subnets) |
-| Automation | EventBridge, Lambda |
-| Monitoring | CloudWatch, CloudWatch Logs |
+---
 
-## Quick Start (local)
+## Quick Start
 
-Prerequisites: Docker with Compose v2.
+### Prerequisites
+
+**System Requirements:**
+- Node.js 18+ (`node --version`)
+- npm or yarn
+- AWS CLI v2 (`aws --version`)
+- Terraform 1.5+ (`terraform --version`)
+- Git
+- Docker (for local testing)
+
+**AWS Account Setup:**
+- AWS account with AdministratorAccess or equivalent permissions
+- AWS credentials configured (`aws configure`)
+- AWS region: `us-east-1` (or update in code as needed)
+
+**GitHub Setup:**
+- GitHub account with repo access
+- GitHub OAuth App created (see [Security Setup](#security-setup))
+
+---
+
+### Local Development Setup
+
+#### Step 1: Clone the Repository
 
 ```bash
 git clone https://github.com/Parshant1231/dev_deploy.git
 cd dev_deploy
-docker compose up
 ```
 
-- Dashboard: http://localhost:3000
-- API: http://localhost:8080 *(adjust to your compose port mapping)*
-
-No `.env` editing is required for local development. Compose ships with non-secret local defaults. Real credentials are never stored in the repo (see [Security](#security)).
-
-## Production Deployment Verification
-
-Zero-downtime is achieved with ECS rolling deployments: `minimumHealthyPercent = 100`, `maximumPercent = 200`, ALB health checks gating traffic to new tasks, and the deployment circuit breaker with rollback enabled.
-
-Verify it yourself during any rollout:
-
-**1. Start a continuous health probe (terminal A):**
+#### Step 2: Install Backend Dependencies
 
 ```bash
-while true; do
-  printf '%s  ' "$(date +%T)"
-  curl -s -o /dev/null -w '%{http_code}  %{time_total}s\n' \
-    https://<YOUR_ALB_DNS_OR_DOMAIN>/health
-  sleep 0.5
-done
+cd apps/backend
+npm install
 ```
 
-**2. Trigger a deployment (terminal B):**
+Create a `.env` file in `apps/backend/`:
 
 ```bash
+cp .env.example .env
+```
+
+Update `.env` with your local values:
+
+```env
+NODE_ENV=development
+PORT=3001
+
+# JWT Secret (use a strong random value)
+JWT_SECRET=$(openssl rand -hex 64)
+JWT_EXPIRES_IN=7d
+
+# GitHub OAuth (get these from GitHub Developer Settings)
+GITHUB_CLIENT_ID=your_github_client_id
+GITHUB_CLIENT_SECRET=your_github_client_secret
+GITHUB_WEBHOOK_SECRET=your_webhook_secret
+
+# AWS Configuration
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=your_aws_key
+AWS_SECRET_ACCESS_KEY=your_aws_secret
+
+# DynamoDB Tables (local or AWS)
+DYNAMODB_USERS_TABLE=devdeploy-users
+DYNAMODB_PROJECTS_TABLE=devdeploy-projects
+DYNAMODB_DEPLOYMENTS_TABLE=devdeploy-deployments
+DYNAMODB_ENVIRONMENTS_TABLE=devdeploy-environments
+DYNAMODB_EVENTS_TABLE=devdeploy-events
+
+# Encryption Key (for storing GitHub tokens)
+TOKEN_ENCRYPTION_KEY=$(openssl rand -hex 32)
+
+# API Configuration
+INTERNAL_API_KEY=$(openssl rand -hex 32)
+```
+
+#### Step 3: Install Frontend Dependencies
+
+```bash
+cd ../frontend
+npm install
+```
+
+Create a `.env.local` file in `apps/frontend/`:
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost:3001
+NEXT_PUBLIC_GITHUB_CLIENT_ID=your_github_client_id
+```
+
+#### Step 4: Start Local Database (DynamoDB)
+
+Option A — Using Docker Compose:
+
+```bash
+cd /path/to/dev_deploy
+docker-compose up -d dynamodb
+```
+
+Option B — Using AWS DynamoDB local:
+
+```bash
+docker run -d -p 8000:8000 amazon/dynamodb-local
+```
+
+#### Step 5: Run the Backend
+
+```bash
+cd apps/backend
+npm run dev
+```
+
+Expected output:
+```
+[ts-node-dev] v2.0.0
+[info] ts-node-dev ver. 2.0.0
+[info] listening on port 3001
+```
+
+#### Step 6: Run the Frontend (in another terminal)
+
+```bash
+cd apps/frontend
+npm run dev
+```
+
+Expected output:
+```
+▲ Next.js 14.2.15
+- Local:        http://localhost:3000
+```
+
+#### Step 7: Test Local Setup
+
+**Backend Health Check:**
+```bash
+curl http://localhost:3001/health
+```
+
+Expected response:
+```json
+{
+  "status": "healthy",
+  "service": "devdeploy-api",
+  "timestamp": "2026-07-04T18:00:00Z"
+}
+```
+
+**Register a User:**
+```bash
+curl -X POST http://localhost:3001/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email":"test@example.com",
+    "password":"Password123!",
+    "name":"Test User"
+  }'
+```
+
+**Access Frontend:**
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+---
+
+### Deploy to AWS
+
+#### Step 1: Set Up AWS Infrastructure with Terraform
+
+Navigate to the Terraform directory:
+
+```bash
+cd infrastructure/terraform/environments/dev
+```
+
+Initialize Terraform:
+
+```bash
+terraform init
+```
+
+Generate strong secret values:
+
+```bash
+echo "JWT_SECRET: $(openssl rand -hex 64)"
+echo "TOKEN_ENCRYPTION_KEY: $(openssl rand -hex 32)"
+echo "GITHUB_CLIENT_ID: (get from GitHub Developer Settings)"
+echo "GITHUB_CLIENT_SECRET: (get from GitHub Developer Settings)"
+echo "DEVDEPLOY_GITHUB_TOKEN: (create a PAT)"
+```
+
+Create `secrets.auto.tfvars` (this file is gitignored):
+
+```bash
+cat > secrets.auto.tfvars <<EOF
+jwt_secret_value           = "your_jwt_secret_here"
+token_encryption_key_value = "your_encryption_key_here"
+github_client_id           = "your_github_client_id"
+github_client_secret       = "your_github_client_secret"
+devdeploy_github_token     = "your_github_pat_token"
+EOF
+```
+
+**Important:** Add to `.gitignore` (already done):
+```bash
+**/secrets.auto.tfvars
+```
+
+#### Step 2: Plan and Apply Terraform
+
+```bash
+# Review the plan
+terraform plan -var-file=secrets.auto.tfvars
+
+# Apply the infrastructure
+terraform apply -var-file=secrets.auto.tfvars
+```
+
+Terraform will create:
+- **AWS Secrets Manager** — Encrypted secret storage
+- **VPC & Networking** — Security groups, subnets, route tables
+- **IAM Roles & Policies** — Permissions for ECS, Lambda, DynamoDB
+- **ECS Cluster & Services** — Container orchestration
+- **DynamoDB Tables** — Data persistence
+- **Application Load Balancer (ALB)** — Traffic routing
+- **ECR Repository** — Docker image registry
+- **CloudWatch Logs** — Log aggregation
+
+After apply completes, you'll see outputs like:
+
+```
+alb_dns_name = "devdeploy-dev-alb-xxx.us-east-1.elb.amazonaws.com"
+api_url = "http://devdeploy-dev-alb-xxx.us-east-1.elb.amazonaws.com/api/v1"
+```
+
+#### Step 3: Verify Infrastructure
+
+```bash
+# Check ECS service status
+aws ecs describe-services \
+  --cluster devdeploy-dev-cluster \
+  --services devdeploy-dev-api-service \
+  --region us-east-1
+
+# Check task health
+aws ecs describe-tasks \
+  --cluster devdeploy-dev-cluster \
+  --tasks $(aws ecs list-tasks --cluster devdeploy-dev-cluster --region us-east-1 --query 'taskArns[0]' --output text) \
+  --region us-east-1 \
+  --query 'tasks[0].{status:lastStatus, health:healthStatus}'
+```
+
+#### Step 4: Deploy Backend to ECS
+
+Build and push Docker image to ECR:
+
+```bash
+# Get ECR repository URI from Terraform output
+ECR_URI=$(terraform output -raw ecr_repository_url)
+
+# Get AWS account ID
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+AWS_REGION="us-east-1"
+
+# Login to ECR
+aws ecr get-login-password --region $AWS_REGION | \
+  docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+# Build Docker image
+cd ../../.. # go back to project root
+docker build -f .github/dockerfiles/backend.Dockerfile \
+  -t $ECR_URI:latest \
+  -t $ECR_URI:$(git rev-parse --short HEAD) \
+  .
+
+# Push to ECR
+docker push $ECR_URI:latest
+docker push $ECR_URI:$(git rev-parse --short HEAD)
+```
+
+#### Step 5: Update ECS Service
+
+```bash
+# Force a new deployment with the latest image
 aws ecs update-service \
-  --cluster <CLUSTER_NAME> \
-  --service <SERVICE_NAME> \
+  --cluster devdeploy-dev-cluster \
+  --service devdeploy-dev-api-service \
+  --region us-east-1 \
   --force-new-deployment
 ```
 
-**3. Watch the rollout converge:**
+Monitor the deployment:
 
 ```bash
+# Watch deployment progress
 aws ecs describe-services \
-  --cluster <CLUSTER_NAME> --services <SERVICE_NAME> \
-  --query 'services[0].deployments[].{status:status,running:runningCount,desired:desiredCount,rollout:rolloutState}'
+  --cluster devdeploy-dev-cluster \
+  --services devdeploy-dev-api-service \
+  --region us-east-1 \
+  --query 'services[0].deployments[*].{status:status, running:runningCount, desired:desiredCount}'
 ```
 
-**Pass criteria:** terminal A shows only `200` for the full rollout (no `502`/`503`/connection errors), and `rolloutState` reaches `COMPLETED`.
-
-## 60-Second Rollback
-
-Every image is tagged with its commit SHA, so any previous release can be redeployed immediately.
-
-**Option A: CLI (about 30–60 seconds)**
+#### Step 6: Test AWS Deployment
 
 ```bash
-# 1. List recent task definition revisions
-aws ecs list-task-definitions --family-prefix <TASK_FAMILY> --sort DESC --max-items 5
+ALB_DNS=$(terraform output -raw alb_dns_name)
 
-# 2. Point the service at the previous revision
-aws ecs update-service \
-  --cluster <CLUSTER_NAME> \
-  --service <SERVICE_NAME> \
-  --task-definition <TASK_FAMILY>:<PREVIOUS_REVISION>
+# Health check
+curl http://$ALB_DNS/health
+
+# Register a user
+curl -X POST http://$ALB_DNS/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"Password123!"}'
+
+# View logs
+aws logs tail /devdeploy/dev/api --region us-east-1 --follow
 ```
 
-**Option B: GitHub Actions UI**
+---
 
-1. Go to **Actions → Deploy** workflow.
-2. Open the last known-good successful run.
-3. Click **Re-run all jobs**. This redeploys that run's exact image tag.
+## Security Setup
 
-Automatic rollback also triggers if the ECS deployment circuit breaker detects failing tasks.
+### 1. Generate Strong Secret Values
 
-## How It Works
-
-1. User connects a GitHub repo in the dashboard.
-2. DevDeploy reads and validates `devdeploy.yml`.
-3. GitHub Actions builds the container image.
-4. Image is pushed to ECR, tagged with the commit SHA.
-5. DevDeploy provisions or updates the ECS service and task definition.
-6. Tasks run in private subnets and receive traffic through the public ALB.
-7. State, logs, and events are recorded for monitoring.
-8. Cleanup workflows remove temporary or inactive resources.
-
-## Project Structure
-
-```text
-.
-├── apps/
-│   ├── backend/             # Express API and deployment services
-│   ├── frontend/            # Next.js dashboard
-│   └── sample-app/          # Sample app for deployment testing
-├── infrastructure/
-│   ├── lambda/              # Platform automation functions
-│   └── terraform/
-│       ├── bootstrap/
-│       ├── environments/
-│       └── modules/
-├── .github/workflows/       # Backend and user-app deployment workflows
-├── docs/architecture/       # Specs and design docs
-├── docker-compose.yml       # Local development stack
-└── .env.example             # Variable names only, no values
-```
-
-## Infrastructure
-
-Terraform modules cover networking, security, storage, compute, Lambda automation, and monitoring.
+**Never** commit secrets to version control. Always generate and store them securely:
 
 ```bash
-cd infrastructure/terraform/environments/<ENV>
-terraform init
-terraform plan
-terraform apply
+# Generate secrets
+JWT_SECRET=$(openssl rand -hex 64)
+TOKEN_ENCRYPTION_KEY=$(openssl rand -hex 32)
+INTERNAL_API_KEY=$(openssl rand -hex 32)
+
+echo "JWT_SECRET=$JWT_SECRET"
+echo "TOKEN_ENCRYPTION_KEY=$TOKEN_ENCRYPTION_KEY"
+echo "INTERNAL_API_KEY=$INTERNAL_API_KEY"
 ```
 
-Review the target environment, region, and remote state backend before applying.
+### 2. Store Secrets in AWS Secrets Manager
 
-## Application Configuration
+Terraform automatically stores secrets in AWS Secrets Manager with KMS encryption:
 
-Apps describe build and runtime needs in `devdeploy.yml`. Full spec: [`docs/architecture/DEVDEPLOY_YML_SPEC.md`](docs/architecture/DEVDEPLOY_YML_SPEC.md).
+```bash
+# Verify secrets are encrypted
+aws secretsmanager list-secrets \
+  --region us-east-1 \
+  --query 'SecretList[?contains(Name,`devdeploy`)].{Name:Name, KMS:KmsKeyId}'
+```
 
-## Security
+### 3. Create GitHub OAuth App
 
-- No secrets in the repo or git history. CI uses GitHub OIDC to assume an AWS role (no long-lived keys).
-- Runtime secrets live in AWS Secrets Manager / SSM Parameter Store.
-- Least-privilege IAM for AWS and GitHub integrations.
-- ECS tasks run in private subnets; only the ALB is internet-facing.
-- Review every Terraform plan before applying.
-- Rotate any credential immediately if exposed.
+1. Go to GitHub → Settings → Developer Settings → OAuth Apps
+2. Click "New OAuth App"
+3. Fill in:
+   - **Application name:** DevDeploy
+   - **Homepage URL:** `http://localhost:3000` (local) or your ALB DNS (production)
+   - **Authorization callback URL:** `http://localhost:3000/api/auth/callback` (local)
+4. Copy **Client ID** and **Client Secret** to your environment variables
 
-## Development Status
+### 4. Create GitHub Personal Access Token (PAT)
 
-All 10 planned phases (foundation, Terraform, backend, GitHub/CI/CD, container platform, orchestrator, auto-destroy, dashboard, observability, security hardening) are complete.
+For triggering workflows from the backend:
+
+1. GitHub → Settings → Developer Settings → Personal Access Tokens (Classic)
+2. Click "Generate new token"
+3. Select scopes: `repo`, `workflow`
+4. Copy token and add to `secrets.auto.tfvars` as `devdeploy_github_token`
+
+### 5. IAM Best Practices
+
+The Terraform configuration creates IAM roles with least-privilege access:
+
+- **ECS Task Role** — Permissions to access DynamoDB, Secrets Manager, ECR, EventBridge
+- **ECS Execution Role** — Permissions to pull images, write logs, retrieve secrets
+- **Lambda Role** — Permissions to invoke other Lambdas and write logs
+
+Review IAM policies:
+
+```bash
+aws iam list-attached-role-policies \
+  --role-name devdeploy-dev-ecs-task-role \
+  --region us-east-1
+```
+
+### 6. .gitignore Configuration
+
+Ensure sensitive files are never committed:
+
+```bash
+# Backend environment
+apps/backend/.env
+apps/backend/.env.local
+apps/backend/.env.*.local
+
+# Frontend environment
+apps/frontend/.env.local
+apps/frontend/.env.*.local
+
+# Terraform secrets
+**/secrets.auto.tfvars
+**/terraform.tfstate*
+
+# AWS credentials
+~/.aws/credentials
+~/.aws/config
+
+# SSH keys
+*.pem
+*.key
+```
+
+---
+
+## Complete Workflow
+
+### User Journey (End-to-End)
+
+#### Step 1: User Creates Account
+
+```bash
+curl -X POST http://localhost:3001/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "SecurePassword123!",
+    "name": "John Doe"
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "data": {
+    "user": {
+      "userId": "usr_abc123",
+      "email": "user@example.com",
+      "name": "John Doe"
+    },
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  }
+}
+```
+
+#### Step 2: User Connects GitHub
+
+Frontend redirects to:
+```
+https://github.com/login/oauth/authorize?client_id=YOUR_CLIENT_ID&redirect_uri=http://localhost:3000/auth/callback&scope=repo,workflow
+```
+
+Backend exchanges OAuth code for access token and stores encrypted in DynamoDB.
+
+#### Step 3: User Creates a Project
+
+```bash
+TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+curl -X POST http://localhost:3001/api/v1/projects \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Web App",
+    "repoFullName": "username/my-web-app",
+    "framework": "nodejs",
+    "port": 3000,
+    "branch": "main"
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "data": {
+    "projectId": "prj_xyz789",
+    "name": "My Web App",
+    "status": "active"
+  }
+}
+```
+
+#### Step 4: User Triggers Deployment
+
+```bash
+curl -X POST http://localhost:3001/api/v1/projects/prj_xyz789/deployments \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "environment": "dev",
+    "commitSha": "abc123def456",
+    "commitMessage": "feat: new feature"
+  }'
+```
+
+This creates a **deployment record** with status `PENDING`.
+
+#### Step 5: GitHub Actions Workflow Triggers
+
+Backend sends webhook to GitHub Actions:
+- Pulls the commit
+- Builds Docker image with `commitSha` as tag
+- Pushes image to ECR
+- Calls backend API to update deployment status
+
+#### Step 6: Backend Updates Deployment Status
+
+GitHub Actions makes authenticated calls using `DEVDEPLOY_INTERNAL_KEY`:
+
+```bash
+# PENDING → BUILDING
+curl -X PATCH http://localhost:3001/api/v1/projects/prj_xyz789/deployments/dep_abc123/status \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "BUILDING"}'
+
+# BUILDING → PUSHING_IMAGE
+# PUSHING_IMAGE → DEPLOYING
+# DEPLOYING → RUNNING (with ALB DNS)
+```
+
+#### Step 7: User Views Live Deployment
+
+Frontend polls `/deployments/dep_abc123`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "deploymentId": "dep_abc123",
+    "status": "RUNNING",
+    "deployedUrl": "http://prj-my-web-app-dev.devdeploy-dev-alb-xxx.us-east-1.elb.amazonaws.com",
+    "createdAt": "2026-07-04T18:00:00Z",
+    "completedAt": "2026-07-04T18:10:00Z"
+  }
+}
+```
+
+User can access deployed application at the provided URL.
+
+---
+
+## Troubleshooting
+
+### Backend Won't Start
+
+**Error:** `Port 3001 already in use`
+
+```bash
+# Find process using port 3001
+lsof -i :3001
+
+# Kill it
+kill -9 <PID>
+
+# Or use a different port
+PORT=3002 npm run dev
+```
+
+**Error:** `Cannot find module '@aws-sdk/...'`
+
+```bash
+cd apps/backend
+npm install
+npm run build
+```
+
+### Frontend Can't Connect to Backend
+
+**Error:** `CORS error` or `Failed to fetch`
+
+1. Verify backend is running: `curl http://localhost:3001/health`
+2. Check `NEXT_PUBLIC_API_URL` in `apps/frontend/.env.local`
+3. Verify CORS is configured in backend (check `src/middleware/cors.ts`)
+
+### AWS Deployment Issues
+
+**ECS tasks not starting:**
+
+```bash
+# Check task logs
+aws ecs describe-tasks \
+  --cluster devdeploy-dev-cluster \
+  --tasks <TASK_ARN> \
+  --region us-east-1 \
+  --query 'tasks[0].containers[0].{reason:reason, exitCode:exitCode}'
+
+# View CloudWatch logs
+aws logs tail /devdeploy/dev/api --region us-east-1 --follow
+```
+
+**Secrets not being injected:**
+
+```bash
+# Verify IAM permissions
+aws iam list-attached-role-policies \
+  --role-name devdeploy-dev-ecs-execution-role
+
+# Check Secrets Manager
+aws secretsmanager get-secret-value \
+  --secret-id devdeploy-dev-app-secrets \
+  --region us-east-1
+```
+
+**ALB health checks failing:**
+
+```bash
+# Check target group health
+aws elbv2 describe-target-health \
+  --target-group-arn <ARN> \
+  --region us-east-1
+```
+
+### Database Connection Issues
+
+**Error:** `Could not connect to DynamoDB`
+
+```bash
+# For local development, ensure Docker container is running
+docker ps | grep dynamodb
+
+# If not running:
+docker-compose up -d dynamodb
+
+# Test connection
+aws dynamodb list-tables --endpoint-url http://localhost:8000
+```
+
+**Error:** `Table does not exist`
+
+```bash
+# For local DynamoDB, create tables:
+aws dynamodb create-table \
+  --table-name devdeploy-users \
+  --attribute-definitions AttributeName=userId,AttributeType=S \
+  --key-schema AttributeName=userId,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --endpoint-url http://localhost:8000
+```
+
+### GitHub Integration Issues
+
+**Error:** `GitHub token invalid or expired`
+
+1. Verify token has `repo` and `workflow` scopes
+2. Token has not been rotated or revoked
+3. Run: `curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/user`
+
+**Error:** `Webhook not registered`
+
+1. Check GitHub repository settings → Webhooks
+2. Verify webhook URL points to correct ALB DNS
+3. Check webhook delivery logs for failures
+
+---
+
+## Additional Documentation
+
+For detailed information, see:
+
+- **Architecture Decisions:** `/docs/architecture/`
+- **Database Schema:** `/docs/architecture/database.md`
+- **Deployment State Machine:** `/docs/architecture/deployment_states.md`
+- **API Testing Reference:** `/API_TESTING.md`
+- **Infrastructure as Code:** `/infrastructure/terraform/`
+
+---
+
+## Support & Contributions
+
+For issues, feature requests, or contributions:
+
+1. Check existing GitHub issues
+2. Create a new issue with detailed reproduction steps
+3. Submit a pull request with tests and documentation
+
+---
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT License — See LICENSE file for details.
+
+---
+
+**Last Updated:** July 4, 2026
+**Maintainer:** DevDeploy Team
