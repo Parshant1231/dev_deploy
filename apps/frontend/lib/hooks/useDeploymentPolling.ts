@@ -25,7 +25,16 @@ export function useDeploymentPolling(projectId: string, deploymentId: string) {
       refreshInterval: (latestData) => {
         if (!latestData) return 3000;
         const isActive = ACTIVE_STATUSES.includes(latestData.status);
-        return isActive ? 3000 : 0; // Stop polling when terminal
+        if (!isActive) return 0; // terminal state — stop polling
+
+        // Safety timeout: if stuck in PENDING for more than 10 minutes,
+        // stop polling (the workflow likely failed silently without updating status)
+        if (latestData.status === 'PENDING') {
+          const ageMs = Date.now() - new Date(latestData.createdAt).getTime();
+          if (ageMs > 10 * 60 * 1000) return 0; // 10 minutes
+        }
+
+        return 3000;
       },
       revalidateOnFocus: true,
     }
@@ -52,7 +61,15 @@ export function useDeploymentsList(projectId: string) {
     projectId ? `deployments/${projectId}` : null,
     () => deploymentsApi.list(projectId),
     {
-      refreshInterval: 10000,
+      // Only keep polling if at least one deployment is still active.
+      // Once all are terminal (FAILED/RUNNING/CANCELLED), stop polling.
+      refreshInterval: (latestData) => {
+        if (!latestData || latestData.length === 0) return 0;
+        const hasActive = latestData.some((d) =>
+          ACTIVE_STATUSES.includes(d.status)
+        );
+        return hasActive ? 5000 : 0;
+      },
     }
   );
 

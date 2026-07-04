@@ -1,12 +1,12 @@
 'use client';
 
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useDeploymentPolling } from '@/lib/hooks/useDeploymentPolling';
 import { DeploymentStatusBadge } from '@/components/deployments/DeploymentStatusBadge';
 import { DeploymentTimeline } from '@/components/deployments/DeploymentTimeline';
 import { DeploymentActions } from '@/components/deployments/DeploymentActions';
 import { Card, CardHeader, CardBody } from '@/components/ui/Card';
-import { ExternalLink, GitCommit, Loader2 } from 'lucide-react';
+import { ExternalLink, GitCommit, Loader2, ArrowLeft } from 'lucide-react';
 import { format } from 'date-fns';
 
 export default function DeploymentDetailPage() {
@@ -14,6 +14,8 @@ export default function DeploymentDetailPage() {
     projectId: string;
     deploymentId: string;
   }>();
+  
+  const router = useRouter();
 
   const { deployment, refresh, isPolling } = useDeploymentPolling(
     projectId,
@@ -30,6 +32,17 @@ export default function DeploymentDetailPage() {
 
   return (
     <div>
+      {/* Back Button */}
+      <div className="mb-6">
+        <button
+          onClick={() => router.back()}
+          className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Project
+        </button>
+      </div>
+
       <div className="mb-6 flex items-start justify-between">
         <div>
           <div className="flex items-center gap-3">
@@ -52,7 +65,7 @@ export default function DeploymentDetailPage() {
 
         {deployment.status === 'RUNNING' && deployment.albDnsName && (
           <a
-            href={`http://${deployment.albDnsName}`}
+            href={deployment.albDnsName.startsWith('http') ? deployment.albDnsName : `http://${deployment.albDnsName}`}
             target="_blank"
             rel="noreferrer"
             className="flex items-center gap-1.5 rounded-lg bg-green-50 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-100"
