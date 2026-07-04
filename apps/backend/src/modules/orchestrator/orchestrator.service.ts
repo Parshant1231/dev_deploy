@@ -10,6 +10,7 @@ import { createGithubClient, triggerWorkflowDispatch } from '../../shared/utils/
 import { publishStatusChange } from '../../aws/eventbridge';
 import { Deployment, DeploymentStatus, Project } from '../../shared/types';
 import { resolveBranchSha } from '../../shared/utils/githubApi';
+import { metrics } from '../../aws/cloudwatch';
 // ─────────────────────────────────────────────
 // RETRY SCHEDULE
 // Exponential backoff: 30s → 2m → 8m
@@ -148,6 +149,8 @@ export class OrchestratorService {
     };
 
     await this.deploymentsRepo.create(deployment);
+    await metrics.deploymentCreated();
+        console.log(`[DEPLOY] Created deployment ${deployment.deploymentId} for ${project.repoFullName} @ ${environment}`);
 
     // ── Step 7: Record event ──────────────────
     await this.eventsService.record({

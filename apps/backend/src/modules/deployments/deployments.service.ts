@@ -6,6 +6,7 @@ import { ProjectsRepository } from '../projects/projects.repository';
 import { AppError } from '../../shared/errors/AppError';
 import { generateId } from '../../shared/utils/id';
 import { Deployment, DeploymentStatus } from '../../shared/types';
+import { metrics } from '../../aws/cloudwatch';
 
 export class DeploymentsService {
   private readonly repo = new DeploymentsRepository();
@@ -203,6 +204,21 @@ export class DeploymentsService {
       eventType: this.statusToEventType(status),
       metadata: additionalData,
     });
+
+     // ── Publish CloudWatch custom metrics ─────
+  if (status === 'RUNNING') {
+    await metrics.deploymentSucceeded();
+
+    // Calculate total deployment duration if we have timestamps
+    if (deployment.createdAt) {
+      const durationSeconds =
+        (Date.now() - new Date(deployment.createdAt).getTime()) / 1000;
+      await metrics.deploymentDuration(durationSeconds);
+    }
+  } else if (status === 'FAILED') {
+    await metrics.deploymentFailed();
+  }
+
   }
 
   async cancelDeployment(
