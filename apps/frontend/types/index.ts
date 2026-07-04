@@ -11,6 +11,7 @@ export interface User {
   avatarUrl?: string;
   createdAt: string;
   status: 'ACTIVE' | 'SUSPENDED';
+  notifyOnDeploymentFailure?: boolean;
 }
 
 export interface Project {

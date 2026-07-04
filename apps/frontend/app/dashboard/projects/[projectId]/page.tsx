@@ -7,6 +7,7 @@ import { useDeploymentsList } from '@/lib/hooks/useDeploymentPolling';
 import { environmentsApi } from '@/lib/api/environments';
 import { DeploymentRow } from '@/components/deployments/DeploymentRow';
 import { DeployButton } from '@/components/deployments/DeployButton';
+import { MetricsPanel } from '@/components/projects/MetricsPanel';
 import { Card, CardHeader, CardBody } from '@/components/ui/Card';
 import { Box, ArrowLeft, Trash2 } from 'lucide-react';
 import Link from 'next/link';
@@ -97,6 +98,10 @@ export default function ProjectDetailPage() {
           </button>
           <DeployButton projectId={projectId} />
         </div>
+      </div>
+
+      <div className="mb-6">
+        <MetricsPanel projectId={projectId} />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

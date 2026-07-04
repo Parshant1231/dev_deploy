@@ -8,6 +8,9 @@ import { DeploymentActions } from '@/components/deployments/DeploymentActions';
 import { Card, CardHeader, CardBody } from '@/components/ui/Card';
 import { ExternalLink, GitCommit, Loader2, ArrowLeft } from 'lucide-react';
 import { format } from 'date-fns';
+import { LogViewer } from '@/components/deployments/LogViewer';
+import { MetricsPanel } from '@/components/projects/MetricsPanel';
+
 
 export default function DeploymentDetailPage() {
   const { projectId, deploymentId } = useParams<{
@@ -101,6 +104,15 @@ export default function DeploymentDetailPage() {
               <DeploymentTimeline projectId={projectId} deploymentId={deploymentId} deploymentStatus={deployment.status} />
             </CardBody>
           </Card>
+        </div>
+
+        <div className="mt-6">
+          <h2 className="mb-3 font-semibold">Logs</h2>
+          <LogViewer
+            projectId={projectId}
+            deploymentId={deploymentId}
+            isActive={isPolling}
+          />
         </div>
 
         <div>

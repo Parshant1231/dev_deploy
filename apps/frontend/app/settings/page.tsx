@@ -9,6 +9,7 @@ import {
   ArrowLeft, CheckCircle2, LogOut,
   User, Zap, Unlink, ExternalLink,
 } from 'lucide-react';
+import { apiClient } from '@/lib/api/client';
 
 function GithubIcon({ className }: { className?: string }) {
   return (
@@ -30,6 +31,15 @@ export default function SettingsPage() {
   const [patValue, setPatValue] = useState('');
   const [patLoading, setPatLoading] = useState(false);
   const [patError, setPatError] = useState<string | null>(null);
+  const [notifyOnFailure, setNotifyOnFailure] = useState<boolean>(true);
+  const [savingPref, setSavingPref] = useState(false);
+
+  // Sync toggle once user data loads from SWR
+  useEffect(() => {
+    if (user?.notifyOnDeploymentFailure !== undefined) {
+      setNotifyOnFailure(user.notifyOnDeploymentFailure);
+    }
+  }, [user]);
 
   // Ref ensures this runs exactly once on mount, even with Turbopack fast-refresh
   const handledRef = useRef(false);
@@ -89,6 +99,19 @@ export default function SettingsPage() {
       setPatError(err instanceof Error ? err.message : 'Failed to connect PAT');
     } finally {
       setPatLoading(false);
+    }
+  }
+
+  async function handleToggleNotify() {
+    const newValue = !notifyOnFailure;
+    setNotifyOnFailure(newValue);
+    setSavingPref(true);
+    try {
+      await apiClient.patch('/auth/notifications', {
+        notifyOnDeploymentFailure: newValue,
+      });
+    } finally {
+      setSavingPref(false);
     }
   }
 
@@ -259,6 +282,43 @@ export default function SettingsPage() {
               </div>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* ── Notifications card ─────────────────── */}
+      <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-100 bg-gradient-to-r from-amber-50 to-orange-50 px-6 py-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+            <span className="text-base">🔔</span>
+            Notifications
+          </div>
+        </div>
+        <div className="px-6 py-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-900">
+                Email me on deployment failure
+              </p>
+              <p className="text-xs text-gray-500">
+                Get notified when a deployment fails so you can respond quickly
+              </p>
+            </div>
+            <button
+              onClick={handleToggleNotify}
+              disabled={savingPref}
+              aria-pressed={notifyOnFailure}
+              aria-label="Toggle email notifications for deployment failures"
+              className={`relative h-6 w-11 rounded-full transition-colors disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${
+                notifyOnFailure ? 'bg-indigo-600' : 'bg-gray-300'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                  notifyOnFailure ? 'translate-x-5' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
+          </div>
         </div>
       </div>
 
