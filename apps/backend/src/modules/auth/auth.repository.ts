@@ -116,4 +116,21 @@ export class AuthRepository {
       })
     );
   }
+
+  async updateNotificationPreference(
+    userId: string,
+    notifyOnDeploymentFailure: boolean
+  ): Promise<void> {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: this.tableName,
+        Key: { userId },
+        UpdateExpression: 'SET notifyOnDeploymentFailure = :pref, updatedAt = :updatedAt',
+        ExpressionAttributeValues: {
+          ':pref': notifyOnDeploymentFailure,
+          ':updatedAt': new Date().toISOString(),
+        },
+      })
+    );
+  }
 }

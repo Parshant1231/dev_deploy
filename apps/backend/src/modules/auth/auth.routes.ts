@@ -129,4 +129,18 @@ router.get('/github/repos', authenticate, async (req: any, res, next) => {
   }
 });
 
+router.patch('/notifications', authenticate, async (req: any, res, next) => {
+  try {
+    const { AuthRepository } = await import('./auth.repository');
+    const repo = new AuthRepository();
+    await repo.updateNotificationPreference(
+      req.user.userId,
+      Boolean(req.body.notifyOnDeploymentFailure)
+    );
+    res.json({ success: true, message: 'Preference updated' });
+  } catch (e) {
+    next(e);
+  }
+});
+
 export default router;

@@ -14,6 +14,7 @@ export interface User {
   createdAt: string;
   updatedAt: string;
   status: 'ACTIVE' | 'SUSPENDED';
+  notifyOnDeploymentFailure?: boolean;
 }
 
 export interface Project {
