@@ -166,3 +166,45 @@ export async function listUserRepositories(
   );
   return response.data;
 }
+
+export async function resolveBranchSha(
+  repoOwner: string,
+  repoName: string,
+  branch: string,
+  accessToken: string
+): Promise<string> {
+  const res = await fetch(
+    `https://api.github.com/repos/${repoOwner}/${repoName}/commits/${branch}`,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(
+      `Failed to resolve SHA for ${repoOwner}/${repoName}@${branch}: ${res.status}`
+    );
+  }
+
+  const data: unknown = await res.json();
+  
+  // Type guard: ensure data is an object with a sha property
+  if (typeof data !== 'object' || data === null || !('sha' in data)) {
+    throw new Error(
+      `Invalid GitHub API response: expected object with 'sha' property`
+    );
+  }
+
+  const sha = (data as Record<string, unknown>).sha;
+  if (typeof sha !== 'string') {
+    throw new Error(
+      `Invalid GitHub API response: 'sha' is not a string`
+    );
+  }
+
+  return sha;
+}

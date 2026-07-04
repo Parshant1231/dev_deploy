@@ -9,7 +9,7 @@ import { config } from '../../config/env';
 import { createGithubClient, triggerWorkflowDispatch } from '../../shared/utils/githubApi';
 import { publishStatusChange } from '../../aws/eventbridge';
 import { Deployment, DeploymentStatus, Project } from '../../shared/types';
-
+import { resolveBranchSha } from '../../shared/utils/githubApi';
 // ─────────────────────────────────────────────
 // RETRY SCHEDULE
 // Exponential backoff: 30s → 2m → 8m
@@ -45,7 +45,7 @@ export class OrchestratorService {
     projectId: string;
     userId: string;
     environment: 'dev' | 'staging' | 'production';
-    commitSha: string;
+    commitSha?: string;       // optional — '' and 'HEAD' are treated as "resolve from branch"
     commitMessage: string;
     isRetry?: boolean;
     retryAttempt?: number;
@@ -54,7 +54,7 @@ export class OrchestratorService {
       projectId,
       userId,
       environment,
-      commitSha,
+      commitSha = '',
       commitMessage,
       isRetry = false,
       retryAttempt = 0,
@@ -73,7 +73,10 @@ export class OrchestratorService {
     }
 
     // ── Step 2: Duplicate detection ───────────
-    if (!isRetry) {
+    // Only check for duplicates if we have a real resolved SHA.
+    // 'HEAD' and '' are unresolved placeholders — skip the check.
+    const hasRealSha = commitSha && commitSha !== 'HEAD' && commitSha.length >= 40;
+    if (!isRetry && hasRealSha) {
       const isDuplicate = await this.isDuplicateDeployment(
         projectId,
         environment,
@@ -173,11 +176,85 @@ export class OrchestratorService {
     // ── Step 9: Trigger GitHub Actions ────────
     // This runs asynchronously after returning the deployment.
     // If it fails, the deployment stays PENDING and can be retried.
-    // Decrypt the user's token to pass as repo_token for the checkout step.
+    // 
+    // For repo_token, we need the PLAIN (unencrypted) token.
+    // This is what GitHub Actions will use to checkout the user's repo.
+    // 
+    // IMPORTANT: GitHub OAuth tokens (gho_) cannot be used for git operations.
+    // We must use a Personal Access Token (ghp_) instead.
+    // If user has OAuth token, fall back to platform token.
     const { decryptToken } = await import('../../shared/utils/crypto');
-    const userRepoToken = user.githubToken
-      ? decryptToken(user.githubToken)
-      : config.devdeployGithubToken;
+    let userRepoToken: string;
+    
+    console.log(`[TOKEN DEBUG] Preparing repo token for deployment ${deployment.deploymentId}`);
+    console.log(`[TOKEN DEBUG] User ${userId} has githubToken: ${!!user.githubToken}`);
+    
+    if (user.githubToken) {
+      try {
+        // User has connected their GitHub — decrypt their token
+        userRepoToken = decryptToken(user.githubToken);
+        console.log(`[TOKEN DEBUG] Successfully decrypted user token (length: ${userRepoToken.length})`);
+        
+        // Check token type
+        const isOAuthToken = userRepoToken.startsWith('gho_');
+        const isPAT = userRepoToken.startsWith('ghp_');
+        
+        console.log(`[TOKEN DEBUG] Token type: OAuth=${isOAuthToken}, PAT=${isPAT}`);
+        
+        if (isOAuthToken) {
+          // OAuth tokens cannot be used for git operations
+          console.warn(
+            `[TOKEN WARN] User ${userId} has OAuth token (gho_), ` +
+            `but OAuth tokens cannot be used for git checkout. ` +
+            `Falling back to platform token. ` +
+            `User should provide a Personal Access Token instead.`
+          );
+          
+          if (!config.devdeployGithubToken) {
+            throw AppError.badRequest(
+              'Your GitHub connection is using an OAuth token, which cannot access repositories. ' +
+              'Please disconnect and reconnect with a Personal Access Token, ' +
+              'or ask the platform admin to configure a deployment token.'
+            );
+          }
+          
+          userRepoToken = config.devdeployGithubToken;
+          console.log(`[TOKEN DEBUG] Using fallback platform token for OAuth user`);
+        } else if (!isPAT) {
+          console.warn(`[TOKEN WARN] User token has unexpected prefix: ${userRepoToken.substring(0, 10)}`);
+        }
+      } catch (error) {
+        console.warn(
+          `[TOKEN DEBUG] Could not decrypt user token for ${userId}, ` +
+          `falling back to platform token. Error: ${error}`
+        );
+        // Fallback: use platform token (which is already plain, not encrypted)
+        if (!config.devdeployGithubToken) {
+          throw AppError.badRequest(
+            'No user token available and platform token not configured. ' +
+            'Ask admin to set DEVDEPLOY_GITHUB_TOKEN.'
+          );
+        }
+        userRepoToken = config.devdeployGithubToken;
+        console.log(`[TOKEN DEBUG] Using fallback platform token due to decryption error`);
+      }
+    } else {
+      // User hasn't connected GitHub — use platform token
+      if (!config.devdeployGithubToken) {
+        throw AppError.badRequest(
+          'Deployment requires either user GitHub connection or configured platform token. ' +
+          'Go to Settings to connect GitHub, or ask admin to set DEVDEPLOY_GITHUB_TOKEN.'
+        );
+      }
+      userRepoToken = config.devdeployGithubToken;
+      console.log(`[TOKEN DEBUG] User has no github token, using platform token`);
+    }
+    
+    console.log(`[TOKEN DEBUG] Final repo_token being passed to workflow (first 20 chars): ${userRepoToken?.substring(0, 20)}...`);
+    console.log(`[TOKEN DEBUG] repo_token length: ${userRepoToken?.length}`);
+    console.log(`[TOKEN DEBUG] repo_token starts with 'ghp_': ${userRepoToken?.startsWith('ghp_')}`);
+    console.log(`[TOKEN DEBUG] repo_token starts with 'gho_': ${userRepoToken?.startsWith('gho_')}`);
+    console.log(`[TOKEN DEBUG] Triggering pipeline with repo_token of type: ${userRepoToken ? 'present' : 'empty'}`);
 
     this.triggerPipeline(deployment, project, githubToken, userRepoToken).catch(
       async (error) => {
@@ -198,9 +275,39 @@ export class OrchestratorService {
     deployment: Deployment,
     project: Project,
     encryptedGithubToken: string,
-    userRepoToken?: string  // plain token for checking out the user's repo
+    plainUserRepoToken?: string  // plain, unencrypted token for checking out the user's repo
   ): Promise<void> {
     const githubClient = createGithubClient(encryptedGithubToken);
+
+    const [repoOwner, repoName] = project.repoFullName!.split('/');
+    const accessToken = plainUserRepoToken || config.devdeployGithubToken || '';
+
+    // Resolve 'HEAD' or missing SHA to the real 40-char commit SHA.
+    // We MUST use project.branch here (e.g. "main"), NOT deployment.environment
+    // (e.g. "dev") — those are different things and using environment would
+    // cause a 404 from the GitHub API.
+    const needsResolution =
+      !deployment.commitSha ||
+      deployment.commitSha === 'HEAD' ||
+      deployment.commitSha.length < 40;
+
+    let resolvedCommitSha: string;
+    if (needsResolution) {
+      console.log(
+        `[SHA] commitSha is "${deployment.commitSha ?? 'undefined'}" — resolving ` +
+        `real SHA for ${repoOwner}/${repoName}@${project.branch}`
+      );
+      resolvedCommitSha = await resolveBranchSha(
+        repoOwner,
+        repoName,
+        project.branch,   // ← always use project.branch, never environment
+        accessToken
+      );
+      console.log(`[SHA] Resolved to: ${resolvedCommitSha}`);
+    } else {
+      resolvedCommitSha = deployment.commitSha!;
+      console.log(`[SHA] Using provided SHA: ${resolvedCommitSha}`);
+    }
 
     await triggerWorkflowDispatch(githubClient, {
       devdeployRepoOwner: config.devdeployRepoOwner,
@@ -209,7 +316,7 @@ export class OrchestratorService {
         deployment_id: deployment.deploymentId,
         project_id: deployment.projectId,
         repo_full_name: project.repoFullName!,
-        commit_sha: deployment.commitSha ?? 'HEAD',
+        commit_sha: resolvedCommitSha,
         environment: deployment.environment,
         framework: project.framework,
         port: String(project.port),
@@ -218,9 +325,9 @@ export class OrchestratorService {
         memory: '512',
         api_url: config.apiPublicUrl,
         app_directory: project.appDirectory ?? '',
-        // Pass the user's own token so the workflow can checkout their repo.
-        // Falls back to the platform token if the user hasn't connected GitHub.
-        repo_token: userRepoToken ?? config.devdeployGithubToken,
+        // Pass the PLAIN user token so the workflow can checkout their repo.
+        // GitHub Actions will use this token in: git clone --token=<repo_token> ...
+        repo_token: plainUserRepoToken || config.devdeployGithubToken || '',
       },
     });
 
@@ -309,7 +416,7 @@ export class OrchestratorService {
       projectId,
       userId,
       environment: deployment.environment,
-      commitSha: deployment.commitSha ?? 'HEAD',
+      commitSha: deployment.commitSha,
       commitMessage: `Retry of ${deploymentId}: ${deployment.commitMessage ?? ''}`,
       isRetry: true,
       retryAttempt: retryCount + 1,
@@ -429,9 +536,37 @@ export class OrchestratorService {
     const githubClient = createGithubClient(rollbackToken);
 
     const { decryptToken } = await import('../../shared/utils/crypto');
-    const rollbackUserToken = user?.githubToken
-      ? decryptToken(user.githubToken)
-      : config.devdeployGithubToken;
+    let rollbackUserToken: string;
+    
+    if (user?.githubToken) {
+      try {
+        rollbackUserToken = decryptToken(user.githubToken);
+      } catch (error) {
+        console.warn(`Could not decrypt user token for rollback, using platform token`);
+        rollbackUserToken = config.devdeployGithubToken;
+      }
+    } else {
+      rollbackUserToken = config.devdeployGithubToken;
+    }
+
+    const [repoOwner, repoName] = project.repoFullName!.split('/');
+
+    // For rollback: the commitSha stored on the target deployment should always
+    // be a real 40-char SHA (it was resolved when that deployment ran).
+    // But guard against 'HEAD' just in case.
+    const rollbackShaNeeded =
+      !targetDeployment.commitSha ||
+      targetDeployment.commitSha === 'HEAD' ||
+      targetDeployment.commitSha.length < 40;
+
+    const rollbackCommitSha = rollbackShaNeeded
+      ? await resolveBranchSha(
+          repoOwner,
+          repoName,
+          project.branch,   // ← use project.branch, not environment
+          rollbackUserToken
+        )
+      : targetDeployment.commitSha!;
 
     await triggerWorkflowDispatch(githubClient, {
       devdeployRepoOwner: config.devdeployRepoOwner,
@@ -440,7 +575,7 @@ export class OrchestratorService {
         deployment_id: rollbackDeployment.deploymentId,
         project_id: projectId,
         repo_full_name: project.repoFullName!,
-        commit_sha: targetDeployment.commitSha ?? 'HEAD',
+        commit_sha: rollbackCommitSha,
         environment: targetDeployment.environment,
         framework: project.framework,
         port: String(project.port),

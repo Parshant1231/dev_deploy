@@ -22,24 +22,30 @@ export const orchestratorController = {
         commitMessage = 'Manual deployment',
       } = req.body;
 
-      if (!commitSha) {
-        res.status(400).json({
-          success: false,
-          error: 'commitSha is required',
-        });
-        return;
-      }
+      console.log(`\n${'='.repeat(80)}`);
+      console.log(`[DEPLOY] Starting deployment trigger`);
+      console.log(`[DEPLOY] User ID: ${req.user.userId}`);
+      console.log(`[DEPLOY] Project ID: ${projectId}`);
+      console.log(`[DEPLOY] Environment: ${environment}`);
+      console.log(`[DEPLOY] Commit SHA: ${commitSha ?? '(none — will resolve from branch)'}`);
+      console.log(`${'='.repeat(80)}\n`);
 
       const deployment = await orchestratorService.orchestrateDeploy({
         projectId,
         userId: req.user.userId,
         environment,
-        commitSha,
+        commitSha: commitSha ?? '',   // backend resolves '' and 'HEAD' to real SHA
         commitMessage,
       });
 
+      console.log(`[DEPLOY] Deployment created successfully: ${deployment.deploymentId}`);
+      console.log(`[DEPLOY] Status: ${deployment.status}`);
+      console.log(`${'='.repeat(80)}\n`);
+
       sendCreated(res, deployment, 'Deployment triggered successfully');
     } catch (e) {
+      console.log(`[DEPLOY] ERROR during deployment:`, e);
+      console.log(`${'='.repeat(80)}\n`);
       next(e);
     }
   },
