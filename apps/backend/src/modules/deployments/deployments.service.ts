@@ -97,6 +97,32 @@ export class DeploymentsService {
       throw AppError.forbidden('Access denied');
     }
 
+    // Auto-expire stale PENDING deployments.
+    // If a deployment has been PENDING for more than 10 minutes it means
+    // the GitHub Actions workflow failed silently (e.g. the Status→FAILED
+    // curl couldn't reach the API). Mark it FAILED so the frontend stops polling.
+    if (deployment.status === 'PENDING') {
+      const ageMs = Date.now() - new Date(deployment.createdAt).getTime();
+      const TEN_MINUTES = 10 * 60 * 1000;
+      if (ageMs > TEN_MINUTES) {
+        const errorMsg = 'Deployment timed out — pipeline did not start within 10 minutes';
+        await this.repo.updateStatus(deploymentId, projectId, 'FAILED', {
+          errorMessage: errorMsg,
+        });
+        await this.eventsService.record({
+          deploymentId,
+          projectId,
+          userId: deployment.userId,
+          type: 'DEPLOYMENT_FAILED',
+          previousStatus: 'PENDING',
+          newStatus: 'FAILED',
+          message: errorMsg,
+          metadata: { autoExpired: true },
+        }).catch(() => {}); // non-critical
+        return { ...deployment, status: 'FAILED', errorMessage: errorMsg };
+      }
+    }
+
     return deployment;
   }
 
@@ -121,7 +147,7 @@ export class DeploymentsService {
     return { url, status: deployment.status };
   }
 
- // ─────────────────────────────────────────────
+  // ─────────────────────────────────────────────
   // Update the existing updateDeploymentStatus method
   // ─────────────────────────────────────────────
   async updateDeploymentStatus(
@@ -134,7 +160,23 @@ export class DeploymentsService {
     if (!deployment) throw AppError.notFound('Deployment not found');
 
     const previousStatus = deployment.status;
-    this.validateTransition(previousStatus, status);
+
+    // The internal pipeline callback (GitHub Actions → API) can transition
+    // a FAILED deployment forward if it was auto-expired by the 10-min timeout
+    // but the workflow was actually still running. In that case we allow the
+    // pipeline to "revive" the deployment by going FAILED → BUILDING/DEPLOYING/RUNNING.
+    const isPipelineRevival =
+      previousStatus === 'FAILED' &&
+      ['BUILDING', 'PUSHING_IMAGE', 'DEPLOYING', 'RUNNING'].includes(status);
+
+    if (!isPipelineRevival) {
+      this.validateTransition(previousStatus, status);
+    } else {
+      console.log(
+        `[STATUS] Pipeline reviving deployment ${deploymentId}: ` +
+        `${previousStatus} → ${status} (auto-expired timeout override)`
+      );
+    }
 
     await this.repo.updateStatus(deploymentId, projectId, status, additionalData);
 
@@ -190,7 +232,7 @@ export class DeploymentsService {
     next: DeploymentStatus
   ): void {
     const validTransitions: Record<DeploymentStatus, DeploymentStatus[]> = {
-      PENDING: ['BUILDING', 'CANCELLED'],
+      PENDING: ['BUILDING', 'FAILED', 'CANCELLED'],
       BUILDING: ['PUSHING_IMAGE', 'FAILED', 'CANCELLED'],
       PUSHING_IMAGE: ['DEPLOYING', 'FAILED'],
       DEPLOYING: ['RUNNING', 'FAILED'],
