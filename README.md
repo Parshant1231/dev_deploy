@@ -75,3 +75,9 @@ See the `/docs` folder for:
 - Database schema
 - Deployment state machine
 - System diagrams
+
+
+
+## PAT for testing the workflow from other person repo
+Note: devdeploy-deploy
+TOKEN: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
