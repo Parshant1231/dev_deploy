@@ -100,6 +100,14 @@ export class AuthService {
   // ─────────────────────────────────────────────
   // GITHUB OAUTH — Exchange code for token
   // ─────────────────────────────────────────────
+  //
+  // LIMITATION: GitHub OAuth tokens (gho_) cannot be used for git operations.
+  // OAuth tokens have limited scopes and are meant for API calls only.
+  // Deployments require a Personal Access Token (ghp_) to perform git checkout.
+  //
+  // FUTURE: Consider switching to GitHub App installation tokens which can
+  // include git-capable scopes (repo, workflow), or prompt users to provide
+  // a separate PAT for deployments.
 
   async connectGithub(
     userId: string,
@@ -147,7 +155,11 @@ export class AuthService {
     }
 
     // Step 4: Store encrypted GitHub token
+    // Note: This is an OAuth token (gho_ prefix) which cannot be used for git operations.
+    // The deployment system will automatically fall back to the platform token (ghp_) instead.
     const encryptedToken = encryptToken(accessToken);
+    console.log(`[AUTH] User ${userId} connected GitHub with OAuth token (gho_). ` +
+      `Deployments will use platform token for git operations.`);
 
     await this.repo.updateGithubConnection(userId, {
       githubId: String(githubUser.id),
