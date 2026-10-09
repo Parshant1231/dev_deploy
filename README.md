@@ -1,48 +1,148 @@
 # DevDeploy
 
-DevDeploy is a self-service application deployment platform that connects GitHub repositories to AWS and automates the path from source code to a running containerized application.
-
-It provides a developer-friendly workflow for configuring applications, building Docker images, publishing them to Amazon ECR, deploying them to Amazon ECS Fargate, and monitoring deployment activity from a web dashboard.
+Self-service deployment platform that takes a GitHub repository to a running containerized app on AWS: build with GitHub Actions, push to Amazon ECR, deploy to ECS Fargate behind an Application Load Balancer. Includes a web dashboard, deployment tracking, and automatic cleanup.
 
 ## Features
 
 - GitHub repository integration
-- Declarative application configuration with `devdeploy.yml`
-- Automated build and deployment workflows using GitHub Actions
-- Docker image builds and Amazon ECR publishing
-- Amazon ECS Fargate deployments behind an Application Load Balancer
+- Declarative config via `devdeploy.yml`
+- Automated build and deploy with GitHub Actions
+- Docker image builds published to Amazon ECR
+- ECS Fargate deployments behind an ALB
 - Deployment orchestration and status tracking
-- Automatic cleanup and destroy workflows
-- Frontend dashboard for managing applications and deployments
-- Authentication, authorization, validation, and secure API middleware
-- AWS observability using CloudWatch and related services
-- Infrastructure as code managed with Terraform
+- Auto-destroy / cleanup workflows
+- Next.js dashboard for apps and deployments
+- Auth, validation, and secured API middleware
+- CloudWatch observability
+- Infrastructure as code with Terraform
 
 ## Architecture
+
+```mermaid
+flowchart LR
+    Dev[Developer] -->|git push| GH[GitHub Actions]
+    GH -->|docker build + push| ECR[(Amazon ECR)]
+    GH -->|update service| ECS
+
+    subgraph VPC[AWS VPC]
+        subgraph Public[Public subnets]
+            ALB[Application Load Balancer]
+            NAT[NAT Gateway]
+        end
+        subgraph Private[Private subnets]
+            ECS[ECS Fargate tasks]
+        end
+        ALB -->|HTTP, health-checked| ECS
+        ECS --> NAT
+    end
+
+    User[End users] --> ALB
+    ECS --> CW[CloudWatch Logs & Metrics]
+    ECR -.->|image pull| ECS
+    EB[EventBridge] --> L[Lambda: cleanup / automation]
+    L --> ECS
+    API[DevDeploy API] --> DDB[(DynamoDB)]
+```
 
 | Layer | Technology |
 |-------|------------|
 | Frontend | Next.js, React, TypeScript, Tailwind CSS |
 | Backend | Node.js, Express, TypeScript |
-| Infrastructure | AWS and Terraform |
-| CI/CD | GitHub Actions and Docker |
-| Database | Amazon DynamoDB |
-| Container runtime | Amazon ECS Fargate |
-| Container registry | Amazon ECR |
-| Load balancing | Application Load Balancer |
-| Events and automation | Amazon EventBridge and AWS Lambda |
-| Monitoring | Amazon CloudWatch and CloudWatch Logs |
+| Infrastructure | AWS, Terraform |
+| CI/CD | GitHub Actions, Docker |
+| Database | DynamoDB |
+| Runtime | ECS Fargate (private subnets) |
+| Registry | ECR |
+| Load balancing | ALB (public subnets) |
+| Automation | EventBridge, Lambda |
+| Monitoring | CloudWatch, CloudWatch Logs |
+
+## Quick Start (local)
+
+Prerequisites: Docker with Compose v2.
+
+```bash
+git clone https://github.com/Parshant1231/dev_deploy.git
+cd dev_deploy
+docker compose up
+```
+
+- Dashboard: http://localhost:3000
+- API: http://localhost:8080 *(adjust to your compose port mapping)*
+
+No `.env` editing is required for local development. Compose ships with non-secret local defaults. Real credentials are never stored in the repo (see [Security](#security)).
+
+## Production Deployment Verification
+
+Zero-downtime is achieved with ECS rolling deployments: `minimumHealthyPercent = 100`, `maximumPercent = 200`, ALB health checks gating traffic to new tasks, and the deployment circuit breaker with rollback enabled.
+
+Verify it yourself during any rollout:
+
+**1. Start a continuous health probe (terminal A):**
+
+```bash
+while true; do
+  printf '%s  ' "$(date +%T)"
+  curl -s -o /dev/null -w '%{http_code}  %{time_total}s\n' \
+    https://<YOUR_ALB_DNS_OR_DOMAIN>/health
+  sleep 0.5
+done
+```
+
+**2. Trigger a deployment (terminal B):**
+
+```bash
+aws ecs update-service \
+  --cluster <CLUSTER_NAME> \
+  --service <SERVICE_NAME> \
+  --force-new-deployment
+```
+
+**3. Watch the rollout converge:**
+
+```bash
+aws ecs describe-services \
+  --cluster <CLUSTER_NAME> --services <SERVICE_NAME> \
+  --query 'services[0].deployments[].{status:status,running:runningCount,desired:desiredCount,rollout:rolloutState}'
+```
+
+**Pass criteria:** terminal A shows only `200` for the full rollout (no `502`/`503`/connection errors), and `rolloutState` reaches `COMPLETED`.
+
+## 60-Second Rollback
+
+Every image is tagged with its commit SHA, so any previous release can be redeployed immediately.
+
+**Option A: CLI (about 30–60 seconds)**
+
+```bash
+# 1. List recent task definition revisions
+aws ecs list-task-definitions --family-prefix <TASK_FAMILY> --sort DESC --max-items 5
+
+# 2. Point the service at the previous revision
+aws ecs update-service \
+  --cluster <CLUSTER_NAME> \
+  --service <SERVICE_NAME> \
+  --task-definition <TASK_FAMILY>:<PREVIOUS_REVISION>
+```
+
+**Option B: GitHub Actions UI**
+
+1. Go to **Actions → Deploy** workflow.
+2. Open the last known-good successful run.
+3. Click **Re-run all jobs**. This redeploys that run's exact image tag.
+
+Automatic rollback also triggers if the ECS deployment circuit breaker detects failing tasks.
 
 ## How It Works
 
-1. A user connects a GitHub repository through the DevDeploy dashboard.
-2. DevDeploy reads the repository configuration and validates the deployment settings.
-3. A GitHub Actions workflow builds the application container image.
-4. The image is pushed to Amazon ECR.
-5. DevDeploy provisions or updates the required ECS service and task definition.
-6. The application is deployed to ECS Fargate and exposed through the configured load balancer.
-7. Deployment state, logs, and operational events are recorded for monitoring.
-8. Cleanup workflows can remove temporary or inactive deployment resources.
+1. User connects a GitHub repo in the dashboard.
+2. DevDeploy reads and validates `devdeploy.yml`.
+3. GitHub Actions builds the container image.
+4. Image is pushed to ECR, tagged with the commit SHA.
+5. DevDeploy provisions or updates the ECS service and task definition.
+6. Tasks run in private subnets and receive traffic through the public ALB.
+7. State, logs, and events are recorded for monitoring.
+8. Cleanup workflows remove temporary or inactive resources.
 
 ## Project Structure
 
@@ -50,154 +150,50 @@ It provides a developer-friendly workflow for configuring applications, building
 .
 ├── apps/
 │   ├── backend/             # Express API and deployment services
-│   ├── frontend/            # Next.js management dashboard
-│   └── sample-app/          # Sample application used for deployment testing
+│   ├── frontend/            # Next.js dashboard
+│   └── sample-app/          # Sample app for deployment testing
 ├── infrastructure/
-│   ├── lambda/              # Lambda functions for platform automation
+│   ├── lambda/              # Platform automation functions
 │   └── terraform/
-│       ├── bootstrap/       # Terraform bootstrap resources
-│       ├── environments/    # Environment-specific configuration
-│       └── modules/         # Reusable AWS infrastructure modules
-├── .github/
-│   └── workflows/           # Backend and user-application deployment workflows
-├── docs/
-│   └── architecture/       # Architecture specifications and design documentation
-├── docker-compose.yml       # Local orchestration configuration
-└── .env.example             # Environment variable template
+│       ├── bootstrap/
+│       ├── environments/
+│       └── modules/
+├── .github/workflows/       # Backend and user-app deployment workflows
+├── docs/architecture/       # Specs and design docs
+├── docker-compose.yml       # Local development stack
+└── .env.example             # Variable names only, no values
 ```
-
-## Development Status
-
-All planned DevDeploy implementation phases are complete:
-
-| Phase | Name | Status |
-|-------|------|--------|
-| 1 | Foundation and System Design | ✅ Complete |
-| 2 | Terraform Infrastructure | ✅ Complete |
-| 3 | Core Backend Platform | ✅ Complete |
-| 4 | GitHub Integration and CI/CD | ✅ Complete |
-| 5 | Container Platform | ✅ Complete |
-| 6 | Deployment Orchestrator | ✅ Complete |
-| 7 | Auto-Destroy System | ✅ Complete |
-| 8 | Frontend Dashboard | ✅ Complete |
-| 9 | Observability and Monitoring | ✅ Complete |
-| 10 | Security Hardening and Scale | ✅ Complete |
-
-## Prerequisites
-
-- Node.js and npm
-- Docker
-- Terraform
-- An AWS account with permissions for the required services
-- A GitHub account and repository access
-- AWS credentials configured for local development or CI/CD
-
-## Getting Started
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/Parshant1231/dev_deploy.git
-cd dev_deploy
-```
-
-### 2. Configure environment variables
-
-Copy the example environment file and provide the values required by your environment:
-
-```bash
-cp .env.example .env
-```
-
-Do not commit access tokens, passwords, private keys, or other secrets to the repository. Store production credentials in GitHub Actions secrets, AWS Secrets Manager, or another approved secrets manager.
-
-### 3. Install dependencies
-
-Install dependencies for both applications:
-
-```bash
-cd apps/backend
-npm install
-
-cd ../frontend
-npm install
-```
-
-### 4. Run the backend
-
-```bash
-cd apps/backend
-npm run dev
-```
-
-The backend also supports:
-
-```bash
-npm run build
-npm start
-npm run lint
-npm run typecheck
-```
-
-### 5. Run the frontend
-
-```bash
-cd apps/frontend
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## Infrastructure
 
-Terraform configuration is organized into reusable modules for networking, security, storage, compute, Lambda automation, and monitoring. Review the environment-specific configuration before applying infrastructure changes.
+Terraform modules cover networking, security, storage, compute, Lambda automation, and monitoring.
 
 ```bash
-cd infrastructure/terraform
+cd infrastructure/terraform/environments/<ENV>
 terraform init
-terraform validate
 terraform plan
 terraform apply
 ```
 
-Run Terraform only after configuring AWS credentials and reviewing the target environment, region, and state backend settings.
-
-## CI/CD Workflows
-
-The repository includes GitHub Actions workflows for:
-
-- Deploying the DevDeploy backend
-- Building and deploying user applications
-- Building Docker images
-- Publishing images to Amazon ECR
-- Updating ECS services and deployment resources
-
-Workflow files are located in `.github/workflows/`.
+Review the target environment, region, and remote state backend before applying.
 
 ## Application Configuration
 
-Applications can define their deployment settings using the DevDeploy configuration format documented in [`docs/architecture/DEVDEPLOY_YML_SPEC.md`](docs/architecture/DEVDEPLOY_YML_SPEC.md).
-
-The configuration describes the application build and runtime requirements used by the deployment pipeline.
-
-## Documentation
-
-Additional project documentation is available in the [`docs`](docs) directory, including:
-
-- Architecture specifications
-- The `devdeploy.yml` configuration format
-- Database and deployment design information
-- Deployment state and workflow documentation
-- System diagrams and architectural decisions
+Apps describe build and runtime needs in `devdeploy.yml`. Full spec: [`docs/architecture/DEVDEPLOY_YML_SPEC.md`](docs/architecture/DEVDEPLOY_YML_SPEC.md).
 
 ## Security
 
-- Keep `.env` files and credentials out of version control.
-- Use GitHub Actions secrets or AWS-managed secret storage for CI/CD credentials.
-- Apply least-privilege permissions to AWS and GitHub integrations.
-- Review Terraform plans before applying changes.
-- Rotate credentials immediately if they are accidentally exposed.
+- No secrets in the repo or git history. CI uses GitHub OIDC to assume an AWS role (no long-lived keys).
+- Runtime secrets live in AWS Secrets Manager / SSM Parameter Store.
+- Least-privilege IAM for AWS and GitHub integrations.
+- ECS tasks run in private subnets; only the ALB is internet-facing.
+- Review every Terraform plan before applying.
+- Rotate any credential immediately if exposed.
+
+## Development Status
+
+All 10 planned phases (foundation, Terraform, backend, GitHub/CI/CD, container platform, orchestrator, auto-destroy, dashboard, observability, security hardening) are complete.
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE).
