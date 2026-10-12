@@ -60,7 +60,38 @@ variable "internal_key" {
   sensitive = true
 }
 
+variable "token_encryption_key" {
+  description = "AES-256 key for encrypting GitHub OAuth tokens stored in DynamoDB"
+  type        = string
+  sensitive   = true
+}
+
+variable "github_client_id" {
+  description = "GitHub OAuth App client ID"
+  type        = string
+  sensitive   = true
+}
+
+variable "github_client_secret" {
+  description = "GitHub OAuth App client secret"
+  type        = string
+  sensitive   = true
+}
+
+variable "devdeploy_github_token" {
+  description = "Platform PAT for triggering GitHub Actions workflows"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "alert_email" {
   description = "Email address to receive CloudWatch alarm notifications"
   type        = string
+}
+
+variable "github_repo" {
+  description = "Repo (and optional ref) allowed to assume the GitHub Actions role. \"*\" = any repo under github_username (previous behaviour). Tighten to e.g. \"dev_deploy:ref:refs/heads/main\"."
+  type        = string
+  default     = "*"
 }

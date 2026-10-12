@@ -1,16 +1,14 @@
 # ─────────────────────────────────────────────
 # STORAGE MODULE
-# Creates: DynamoDB tables, S3 bucket, ECR repositories
+# Creates: DynamoDB tables, ECR repositories,
+#          S3 artifacts bucket, EventBridge custom bus
 # ─────────────────────────────────────────────
 
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
 }
 
-# ─────────────────────────────────────────────
-# DYNAMODB: USERS TABLE
-# ─────────────────────────────────────────────
-
+# ── DYNAMODB: USERS ───────────────────────────
 resource "aws_dynamodb_table" "users" {
   name         = "${var.project_name}-users"
   billing_mode = "PAY_PER_REQUEST"
@@ -43,15 +41,10 @@ resource "aws_dynamodb_table" "users" {
     projection_type = "ALL"
   }
 
-  tags = {
-    Name = "${var.project_name}-users"
-  }
+  tags = { Name = "${var.project_name}-users" }
 }
 
-# ─────────────────────────────────────────────
-# DYNAMODB: PROJECTS TABLE
-# ─────────────────────────────────────────────
-
+# ── DYNAMODB: PROJECTS ───────────────────────
 resource "aws_dynamodb_table" "projects" {
   name         = "${var.project_name}-projects"
   billing_mode = "PAY_PER_REQUEST"
@@ -73,15 +66,10 @@ resource "aws_dynamodb_table" "projects" {
     projection_type = "ALL"
   }
 
-  tags = {
-    Name = "${var.project_name}-projects"
-  }
+  tags = { Name = "${var.project_name}-projects" }
 }
 
-# ─────────────────────────────────────────────
-# DYNAMODB: DEPLOYMENTS TABLE
-# ─────────────────────────────────────────────
-
+# ── DYNAMODB: DEPLOYMENTS ────────────────────
 resource "aws_dynamodb_table" "deployments" {
   name         = "${var.project_name}-deployments"
   billing_mode = "PAY_PER_REQUEST"
@@ -122,16 +110,10 @@ resource "aws_dynamodb_table" "deployments" {
     projection_type = "ALL"
   }
 
-  tags = {
-    Name = "${var.project_name}-deployments"
-  }
+  tags = { Name = "${var.project_name}-deployments" }
 }
 
-# ─────────────────────────────────────────────
-# DYNAMODB: ENVIRONMENTS TABLE
-# TTL enabled for auto-destroy
-# ─────────────────────────────────────────────
-
+# ── DYNAMODB: ENVIRONMENTS ───────────────────
 resource "aws_dynamodb_table" "environments" {
   name         = "${var.project_name}-environments"
   billing_mode = "PAY_PER_REQUEST"
@@ -165,24 +147,15 @@ resource "aws_dynamodb_table" "environments" {
     projection_type = "ALL"
   }
 
-  # TTL — DynamoDB will automatically mark records
-  # for deletion when the Unix timestamp in the
-  # 'ttl' field has passed.
   ttl {
     attribute_name = "ttl"
     enabled        = true
   }
 
-  tags = {
-    Name = "${var.project_name}-environments"
-  }
+  tags = { Name = "${var.project_name}-environments" }
 }
 
-# ─────────────────────────────────────────────
-# DYNAMODB: EVENTS TABLE
-# Append-only audit log
-# ─────────────────────────────────────────────
-
+# ── DYNAMODB: EVENTS ─────────────────────────
 resource "aws_dynamodb_table" "events" {
   name         = "${var.project_name}-events"
   billing_mode = "PAY_PER_REQUEST"
@@ -211,25 +184,80 @@ resource "aws_dynamodb_table" "events" {
     projection_type = "ALL"
   }
 
-  tags = {
-    Name = "${var.project_name}-events"
-  }
+  tags = { Name = "${var.project_name}-events" }
 }
 
-# ─────────────────────────────────────────────
-# S3 BUCKET — Deployment artifacts and logs
-# ─────────────────────────────────────────────
+# ── ECR: BACKEND API ──────────────────────────
+resource "aws_ecr_repository" "api" {
+  name                 = "${local.name_prefix}-api"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
 
-resource "aws_s3_bucket" "artifacts" {
-  bucket = "${local.name_prefix}-artifacts-${var.aws_account_id}"
-
-  tags = {
-    Name = "${local.name_prefix}-artifacts"
+  image_scanning_configuration {
+    scan_on_push = true
   }
+
+  tags = { Name = "${local.name_prefix}-api" }
+}
+
+resource "aws_ecr_lifecycle_policy" "api" {
+  repository = aws_ecr_repository.api.name
+
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep last 10 images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 10
+      }
+      action = { type = "expire" }
+    }]
+  })
+}
+
+# ── ECR: USER APPS ────────────────────────────
+resource "aws_ecr_repository" "user_apps" {
+  name                 = "${local.name_prefix}-user-apps"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = { Name = "${local.name_prefix}-user-apps" }
+}
+
+resource "aws_ecr_lifecycle_policy" "user_apps" {
+  repository = aws_ecr_repository.user_apps.name
+
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep last 20 images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 20
+      }
+      action = { type = "expire" }
+    }]
+  })
+}
+
+# ── S3: DEPLOYMENT ARTIFACTS ──────────────────
+resource "aws_s3_bucket" "artifacts" {
+  bucket        = "${local.name_prefix}-artifacts-${var.aws_account_id}"
+  force_destroy = true
+
+  tags = { Name = "${local.name_prefix}-artifacts" }
 }
 
 resource "aws_s3_bucket_versioning" "artifacts" {
   bucket = aws_s3_bucket.artifacts.id
+
   versioning_configuration {
     status = "Enabled"
   }
@@ -237,6 +265,7 @@ resource "aws_s3_bucket_versioning" "artifacts" {
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
   bucket = aws_s3_bucket.artifacts.id
+
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
@@ -269,159 +298,48 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
   }
 }
 
-# ─────────────────────────────────────────────
-# ECR REPOSITORY — Backend API image
-# ─────────────────────────────────────────────
-
-resource "aws_ecr_repository" "api" {
-  name                 = "${local.name_prefix}-api"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  tags = {
-    Name = "${local.name_prefix}-api"
-  }
-}
-
-# ─────────────────────────────────────────────
-# ECR REPOSITORY — User application images
-# ─────────────────────────────────────────────
-
-resource "aws_ecr_repository" "user_apps" {
-  name                 = "${local.name_prefix}-user-apps"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  tags = {
-    Name = "${local.name_prefix}-user-apps"
-  }
-}
-
-# ECR Lifecycle Policy — Keep only last 10 images
-# Prevents ECR storage costs from growing unbounded
-
-resource "aws_ecr_lifecycle_policy" "api" {
-  repository = aws_ecr_repository.api.name
-
-  policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Keep last 10 images"
-        selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = 10
-        }
-        action = {
-          type = "expire"
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_ecr_lifecycle_policy" "user_apps" {
-  repository = aws_ecr_repository.user_apps.name
-
-  policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Keep last 20 images"
-        selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = 20
-        }
-        action = {
-          type = "expire"
-        }
-      }
-    ]
-  })
-}
-
-# ─────────────────────────────────────────────
-# EVENTBRIDGE CUSTOM EVENT BUS
-#
-# All DevDeploy deployment events are published here.
-# EventBridge rules route events to subscribers:
-#   - CloudWatch Logs (always — for audit trail)
-#   - Lambda (Phase 7 — auto-destroy trigger)
-#   - SNS (Phase 9 — notifications)
-#
-# Using a custom bus isolates DevDeploy events from
-# AWS service events on the default bus.
-# ─────────────────────────────────────────────
-
-resource "aws_cloudwatch_event_bus" "devdeploy" {
+# ── EVENTBRIDGE: CUSTOM BUS ───────────────────
+resource "aws_cloudwatch_event_bus" "main" {
   name = "${var.project_name}-${var.environment}-events"
 
-  tags = {
-    Name = "${var.project_name}-${var.environment}-events"
-  }
+  tags = { Name = "${var.project_name}-${var.environment}-events" }
 }
 
-# ─────────────────────────────────────────────
-# EVENTBRIDGE RULE — Route all events to CloudWatch
-#
-# This rule captures every event published to the bus
-# and sends it to a CloudWatch log group.
-# This creates a permanent, queryable audit trail.
-# ─────────────────────────────────────────────
+# CloudWatch log group for EventBridge audit trail
+resource "aws_cloudwatch_log_group" "event_bus_logs" {
+  name              = "/devdeploy/${var.environment}/events"
+  retention_in_days = 30
 
-resource "aws_cloudwatch_event_rule" "all_events_to_logs" {
-  name           = "${var.project_name}-${var.environment}-all-events"
-  description    = "Route all DevDeploy events to CloudWatch for audit logging"
-  event_bus_name = aws_cloudwatch_event_bus.devdeploy.name
+  tags = { Name = "${local.name_prefix}-event-logs" }
+}
 
-  # Match every event published to this bus
+resource "aws_cloudwatch_event_rule" "all_events" {
+  name           = "${local.name_prefix}-all-events"
+  description    = "Capture all DevDeploy events to CloudWatch"
+  event_bus_name = aws_cloudwatch_event_bus.main.name
+
   event_pattern = jsonencode({
     source = ["devdeploy.deployments"]
   })
 }
 
-resource "aws_cloudwatch_log_group" "event_bus_logs" {
-  name              = "/devdeploy/${var.environment}/events"
-  retention_in_days = 30
-
-  tags = {
-    Name = "${var.project_name}-${var.environment}-event-logs"
-  }
-}
-
 resource "aws_cloudwatch_event_target" "events_to_logs" {
-  rule           = aws_cloudwatch_event_rule.all_events_to_logs.name
-  event_bus_name = aws_cloudwatch_event_bus.devdeploy.name
+  rule           = aws_cloudwatch_event_rule.all_events.name
+  event_bus_name = aws_cloudwatch_event_bus.main.name
   target_id      = "SendToCloudWatch"
   arn            = aws_cloudwatch_log_group.event_bus_logs.arn
 }
 
-# Allow EventBridge to write to the CloudWatch log group
 resource "aws_cloudwatch_log_resource_policy" "eventbridge_logs" {
-  policy_name = "${var.project_name}-${var.environment}-eventbridge-logs"
+  policy_name = "${local.name_prefix}-eventbridge-logs"
 
   policy_document = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "events.amazonaws.com"
-        }
-        Action = [
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ]
-        Resource = "${aws_cloudwatch_log_group.event_bus_logs.arn}:*"
-      }
-    ]
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = ["logs:CreateLogStream", "logs:PutLogEvents"]
+      Resource  = "${aws_cloudwatch_log_group.event_bus_logs.arn}:*"
+    }]
   })
 }
