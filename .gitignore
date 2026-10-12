@@ -59,3 +59,13 @@ test_all.sh
 infrastructure/terraform/modules/lambda/auto-destroy.zip
 # Add this line
 **/secrets.auto.tfvarsauto_destroy.zip
+
+# Terraform sensitive files
+**/backend.hcl
+**/*.auto.tfvars
+**/*.tfvars
+!**/*.tfvars.example
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.zip
