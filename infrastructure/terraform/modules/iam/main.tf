@@ -362,9 +362,11 @@ resource "aws_iam_role" "github_actions" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            # var.github_repo = "*" keeps the original "any repo, any branch" behaviour.
-            # Tighten it to e.g. "dev_deploy:ref:refs/heads/main" once verified.
-            "token.actions.githubusercontent.com:sub" = var.github_repo == "*" ? "repo:${var.github_username}/*:*" : "repo:${var.github_username}/${var.github_repo}"
+            # Always append :* so the sub claim matches any branch/tag/PR ref.
+            # GitHub always sends sub as "repo:<owner>/<repo>:ref:refs/heads/<branch>"
+            # Without :* the role can never be assumed.
+            # To lock down to main only, set github_repo = "dev_deploy:ref:refs/heads/main"
+            "token.actions.githubusercontent.com:sub" = var.github_repo == "*" ? "repo:${var.github_username}/*:*" : "repo:${var.github_username}/${var.github_repo}:*"
           }
         }
       }
