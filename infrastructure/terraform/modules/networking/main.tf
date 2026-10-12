@@ -1,117 +1,66 @@
 # ─────────────────────────────────────────────
 # NETWORKING MODULE
-# Creates: VPC, Public Subnets, Private Subnets,
-#          Internet Gateway, NAT Gateway, Route Tables
+# Creates: VPC, public/private subnets across 2 AZs,
+#          Internet Gateway, NAT Gateway (1, cost-optimised),
+#          route tables and associations.
 # ─────────────────────────────────────────────
 
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
 }
 
-# ─────────────────────────────────────────────
-# VPC
-# ─────────────────────────────────────────────
-
+# ── VPC ──────────────────────────────────────
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
-  enable_dns_hostnames = true
   enable_dns_support   = true
+  enable_dns_hostnames = true
 
-  tags = {
-    Name = "${local.name_prefix}-vpc"
-  }
+  tags = { Name = "${local.name_prefix}-vpc" }
 }
 
-# ─────────────────────────────────────────────
-# INTERNET GATEWAY
-# Allows public subnet resources to reach the internet
-# ─────────────────────────────────────────────
-
+# ── INTERNET GATEWAY ─────────────────────────
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
-
-  tags = {
-    Name = "${local.name_prefix}-igw"
-  }
+  tags   = { Name = "${local.name_prefix}-igw" }
 }
 
-# ─────────────────────────────────────────────
-# PUBLIC SUBNETS
-# One per availability zone
-# ALB lives here
-# ─────────────────────────────────────────────
-
+# ── PUBLIC SUBNETS ───────────────────────────
 resource "aws_subnet" "public" {
-  count = length(var.availability_zones)
+  count             = length(var.availability_zones)
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = var.public_subnet_cidrs[count.index]
+  availability_zone = var.availability_zones[count.index]
 
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = var.public_subnet_cidrs[count.index]
-  availability_zone       = var.availability_zones[count.index]
   map_public_ip_on_launch = true
 
-  tags = {
-    Name = "${local.name_prefix}-public-subnet-${count.index + 1}"
-    Type = "public"
-  }
+  tags = { Name = "${local.name_prefix}-public-${var.availability_zones[count.index]}" }
 }
 
-# ─────────────────────────────────────────────
-# PRIVATE SUBNETS
-# One per availability zone
-# ECS tasks live here
-# ─────────────────────────────────────────────
-
+# ── PRIVATE SUBNETS ──────────────────────────
 resource "aws_subnet" "private" {
-  count = length(var.availability_zones)
-
+  count             = length(var.availability_zones)
   vpc_id            = aws_vpc.main.id
   cidr_block        = var.private_subnet_cidrs[count.index]
   availability_zone = var.availability_zones[count.index]
 
-  tags = {
-    Name = "${local.name_prefix}-private-subnet-${count.index + 1}"
-    Type = "private"
-  }
+  tags = { Name = "${local.name_prefix}-private-${var.availability_zones[count.index]}" }
 }
 
-# ─────────────────────────────────────────────
-# ELASTIC IP for NAT Gateway
-# A static IP address that the NAT Gateway uses
-# for all outbound traffic from private subnets
-# ─────────────────────────────────────────────
-
+# ── NAT GATEWAY (single, in first public subnet) ─
+# One NAT per region is fine for dev; use per-AZ for prod.
 resource "aws_eip" "nat" {
-  domain     = "vpc"
-  depends_on = [aws_internet_gateway.main]
-
-  tags = {
-    Name = "${local.name_prefix}-nat-eip"
-  }
+  domain = "vpc"
+  tags   = { Name = "${local.name_prefix}-nat-eip" }
 }
-
-# ─────────────────────────────────────────────
-# NAT GATEWAY
-# Sits in the public subnet.
-# Allows private subnet resources to make
-# outbound requests without being publicly reachable.
-# ─────────────────────────────────────────────
 
 resource "aws_nat_gateway" "main" {
   allocation_id = aws_eip.nat.id
   subnet_id     = aws_subnet.public[0].id
   depends_on    = [aws_internet_gateway.main]
-
-  tags = {
-    Name = "${local.name_prefix}-nat-gateway"
-  }
+  tags          = { Name = "${local.name_prefix}-nat" }
 }
 
-# ─────────────────────────────────────────────
-# PUBLIC ROUTE TABLE
-# Routes all internet traffic (0.0.0.0/0)
-# through the Internet Gateway
-# ─────────────────────────────────────────────
-
+# ── ROUTE TABLE — PUBLIC ─────────────────────
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -120,9 +69,7 @@ resource "aws_route_table" "public" {
     gateway_id = aws_internet_gateway.main.id
   }
 
-  tags = {
-    Name = "${local.name_prefix}-public-rt"
-  }
+  tags = { Name = "${local.name_prefix}-public-rt" }
 }
 
 resource "aws_route_table_association" "public" {
@@ -131,11 +78,7 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# ─────────────────────────────────────────────
-# PRIVATE ROUTE TABLE
-# Routes all internet traffic through the NAT Gateway
-# ─────────────────────────────────────────────
-
+# ── ROUTE TABLE — PRIVATE ────────────────────
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
 
@@ -144,9 +87,7 @@ resource "aws_route_table" "private" {
     nat_gateway_id = aws_nat_gateway.main.id
   }
 
-  tags = {
-    Name = "${local.name_prefix}-private-rt"
-  }
+  tags = { Name = "${local.name_prefix}-private-rt" }
 }
 
 resource "aws_route_table_association" "private" {

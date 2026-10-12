@@ -1,6 +1,7 @@
 # ─────────────────────────────────────────────
-# SECURITY MODULE
-# Creates: Security Groups, IAM Roles, IAM Policies
+# IAM MODULE
+# Creates: ECS execution role, ECS task role, Lambda role,
+#          GitHub Actions OIDC provider + role, and their policies.
 # ─────────────────────────────────────────────
 
 locals {
@@ -8,86 +9,9 @@ locals {
 }
 
 # ─────────────────────────────────────────────
-# SECURITY GROUP: ALB
-# The load balancer accepts traffic from the internet
-# on ports 80 and 443 only.
-# ─────────────────────────────────────────────
-
-resource "aws_security_group" "alb" {
-  name        = "${local.name_prefix}-alb-sg"
-  description = "Security group for Application Load Balancer"
-  vpc_id      = var.vpc_id
-
-  ingress {
-    description = "HTTP from internet"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTPS from internet"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    description = "All outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "${local.name_prefix}-alb-sg"
-  }
-}
-
-# ─────────────────────────────────────────────
-# SECURITY GROUP: ECS
-# ECS tasks only accept traffic from the ALB.
-# They should never be reachable from the internet.
-# ─────────────────────────────────────────────
-
-resource "aws_security_group" "ecs" {
-  name        = "${local.name_prefix}-ecs-sg"
-  description = "Security group for ECS tasks"
-  vpc_id      = var.vpc_id
-
-  ingress {
-    description     = "Traffic from ALB only"
-    from_port       = 0
-    to_port         = 65535
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
-  }
-
-  egress {
-    description = "All outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "${local.name_prefix}-ecs-sg"
-  }
-}
-
-# ─────────────────────────────────────────────
-# IAM ROLE: ECS TASK EXECUTION ROLE
-#
-# This role is used by the ECS AGENT (the AWS
-# infrastructure layer) to:
-# - Pull your Docker image from ECR
-# - Write logs to CloudWatch
-#
-# Think of it as: what AWS needs to DO to run your container.
+# ECS TASK EXECUTION ROLE
+# Used by the ECS agent to pull images from ECR, write logs
+# to CloudWatch, and read container secrets.
 # ─────────────────────────────────────────────
 
 resource "aws_iam_role" "ecs_execution_role" {
@@ -116,16 +40,25 @@ resource "aws_iam_role_policy_attachment" "ecs_execution_role_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+resource "aws_iam_role_policy" "execution_secrets_access" {
+  name = "${local.name_prefix}-execution-secrets-policy"
+  role = aws_iam_role.ecs_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = var.app_secrets_arn
+      }
+    ]
+  })
+}
+
 # ─────────────────────────────────────────────
-# IAM ROLE: ECS TASK ROLE
-#
-# This role is used by YOUR APPLICATION CODE
-# running inside the container to call AWS services:
-# - Read/write to DynamoDB
-# - Write to EventBridge
-# - Read/write to S3
-#
-# Think of it as: what your app needs permission to DO.
+# ECS TASK ROLE
+# Used by the application code running inside the container.
 # ─────────────────────────────────────────────
 
 resource "aws_iam_role" "ecs_task_role" {
@@ -199,6 +132,16 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
         ]
       },
       {
+        # The state bucket also matches devdeploy-*; the application must never touch it.
+        Sid    = "DenyTerraformState"
+        Effect = "Deny"
+        Action = "s3:*"
+        Resource = [
+          "arn:aws:s3:::devdeploy-terraform-state-*",
+          "arn:aws:s3:::devdeploy-terraform-state-*/*"
+        ]
+      },
+      {
         Sid    = "CloudWatchLogsAccess"
         Effect = "Allow"
         Action = [
@@ -229,10 +172,15 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
         Resource = "*"
       },
       {
-        Sid    = "ECRAccess"
+        Sid      = "ECRAuthToken"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "ECRRepositoryAccess"
         Effect = "Allow"
         Action = [
-          "ecr:GetAuthorizationToken",
           "ecr:BatchCheckLayerAvailability",
           "ecr:GetDownloadUrlForLayer",
           "ecr:BatchGetImage",
@@ -241,7 +189,9 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
           "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload"
         ]
-        Resource = "*"
+        Resource = [
+          "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/devdeploy-*"
+        ]
       },
       {
         Sid    = "ECSManagement"
@@ -272,37 +222,8 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
   })
 }
 
-resource "aws_secretsmanager_secret" "app_secrets" {
-  name = "${local.name_prefix}-app-secrets"
-}
-
-resource "aws_secretsmanager_secret_version" "app_secrets" {
-  secret_id = aws_secretsmanager_secret.app_secrets.id
-
-  secret_string = jsonencode({
-    JWT_SECRET             = var.jwt_secret
-    DEVDEPLOY_INTERNAL_KEY = var.internal_key
-  })
-}
-
-resource "aws_iam_role_policy" "execution_secrets_access" {
-  name = "${var.project_name}-${var.environment}-execution-secrets-policy"
-  role = aws_iam_role.ecs_execution_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = aws_secretsmanager_secret.app_secrets.arn
-      }
-    ]
-  })
-}
-
 # ─────────────────────────────────────────────
-# IAM ROLE: LAMBDA EXECUTION ROLE
+# LAMBDA EXECUTION ROLE
 # Used by Lambda functions (auto-destroy, deploy handler)
 # ─────────────────────────────────────────────
 
@@ -404,44 +325,9 @@ resource "aws_iam_role_policy" "lambda_policy" {
 }
 
 # ─────────────────────────────────────────────
-# IAM POLICY: GitHub Actions EC2 Network Discovery
-# Needed by deploy-user-app.yml to look up subnets
-# and security groups when creating an ECS service.
-# ─────────────────────────────────────────────
-
-resource "aws_iam_role_policy" "github_actions_ec2_discovery" {
-  name = "${local.name_prefix}-ec2-discovery-policy"
-  role = aws_iam_role.github_actions.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "EC2NetworkDiscovery"
-        Effect = "Allow"
-        Action = [
-          "ec2:DescribeSubnets",
-          "ec2:DescribeSecurityGroups",
-          "ec2:DescribeVpcs"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
-}
-
-
-# ─────────────────────────────────────────────
 # GITHUB ACTIONS OIDC PROVIDER
-#
-# This tells AWS to trust GitHub's identity tokens.
-# When GitHub Actions runs, it gets a JWT from GitHub.
-# It sends that JWT to AWS STS.
-# AWS verifies the JWT using GitHub's published public keys.
-# AWS issues temporary credentials that expire in 1 hour.
-#
-# The thumbprint is GitHub's TLS certificate fingerprint.
-# It ensures AWS only accepts tokens from GitHub's real servers.
+# AWS trusts GitHub's identity tokens, so the pipeline gets
+# short-lived credentials instead of stored access keys.
 # ─────────────────────────────────────────────
 
 resource "aws_iam_openid_connect_provider" "github_actions" {
@@ -449,8 +335,7 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
 
   client_id_list = ["sts.amazonaws.com"]
 
-  # GitHub's OIDC thumbprint
-  # This is a fixed value for GitHub Actions — does not change per account
+  # GitHub's OIDC thumbprint (fixed value for GitHub Actions)
   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
 
   tags = {
@@ -458,18 +343,8 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
   }
 }
 
-# ─────────────────────────────────────────────
-# IAM ROLE — GitHub Actions
-#
-# GitHub Actions assumes this role during the pipeline.
-# The trust policy restricts which GitHub repositories
-# are allowed to assume this role.
-#
-# The condition "token.actions.githubusercontent.com:sub"
-# locks the role to a specific repository and branch.
-# This prevents other GitHub repos from assuming your role.
-# ─────────────────────────────────────────────
-
+# GitHub Actions role — the trust policy limits which repositories
+# (and optionally which branch) may assume it.
 resource "aws_iam_role" "github_actions" {
   name = "${local.name_prefix}-github-actions-role"
 
@@ -487,10 +362,9 @@ resource "aws_iam_role" "github_actions" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            # Replace YOUR_GITHUB_USERNAME with your actual GitHub username
-            # The * wildcard allows any branch to deploy
-            # To restrict to main only: "repo:YOUR_GITHUB_USERNAME/devdeploy:ref:refs/heads/main"
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_username}/*:*"
+            # var.github_repo = "*" keeps the original "any repo, any branch" behaviour.
+            # Tighten it to e.g. "dev_deploy:ref:refs/heads/main" once verified.
+            "token.actions.githubusercontent.com:sub" = var.github_repo == "*" ? "repo:${var.github_username}/*:*" : "repo:${var.github_username}/${var.github_repo}"
           }
         }
       }
@@ -502,13 +376,7 @@ resource "aws_iam_role" "github_actions" {
   }
 }
 
-# ─────────────────────────────────────────────
-# IAM POLICY — GitHub Actions Permissions
-#
-# Principle of least privilege:
-# Only the permissions GitHub Actions actually needs.
-# ─────────────────────────────────────────────
-
+# GitHub Actions permissions — only what the pipeline needs
 resource "aws_iam_role_policy" "github_actions" {
   name = "${local.name_prefix}-github-actions-policy"
   role = aws_iam_role.github_actions.id
@@ -516,101 +384,101 @@ resource "aws_iam_role_policy" "github_actions" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-    {
-      Sid    = "ECRAuthentication"
-      Effect = "Allow"
-      Action = "ecr:GetAuthorizationToken"
-      Resource = "*"
-    },
-    {
-      Sid    = "ECRImagePush"
-      Effect = "Allow"
-      Action = [
-        "ecr:BatchCheckLayerAvailability",
-        "ecr:GetDownloadUrlForLayer",
-        "ecr:BatchGetImage",
-        "ecr:InitiateLayerUpload",
-        "ecr:UploadLayerPart",
-        "ecr:CompleteLayerUpload",
-        "ecr:PutImage"
-      ]
-      Resource = [
-        "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/devdeploy-*"
-      ]
-    },
-    {
-      Sid    = "ECSDeployment"
-      Effect = "Allow"
-      Action = [
-        "ecs:RegisterTaskDefinition",
-        "ecs:DeregisterTaskDefinition",
-        "ecs:UpdateService",
-        "ecs:CreateService",
-        "ecs:DeleteService",
-        "ecs:DescribeServices",
-        "ecs:DescribeTaskDefinition",
-        "ecs:ListTaskDefinitions",
-        "ecs:DescribeTasks",
-        "ecs:ListTasks",
-        "ecs:WaitUntilServicesStable"
-      ]
-      Resource = "*"
-    },
-    {
-      Sid    = "ALBManagement"
-      Effect = "Allow"
-      Action = [
-        "elasticloadbalancing:CreateTargetGroup",
-        "elasticloadbalancing:DeleteTargetGroup",
-        "elasticloadbalancing:DescribeTargetGroups",
-        "elasticloadbalancing:ModifyTargetGroupAttributes",
-        "elasticloadbalancing:CreateRule",
-        "elasticloadbalancing:DeleteRule",
-        "elasticloadbalancing:DescribeRules",
-        "elasticloadbalancing:ModifyRule",
-        "elasticloadbalancing:DescribeLoadBalancers",
-        "elasticloadbalancing:DescribeListeners",
-        "elasticloadbalancing:RegisterTargets",
-        "elasticloadbalancing:DeregisterTargets",
-        "elasticloadbalancing:DescribeTargetHealth"
-      ]
-      Resource = "*"
-    },
-    {
-      Sid    = "EC2NetworkQuery"
-      Effect = "Allow"
-      Action = [
-        "ec2:DescribeVpcs",
-        "ec2:DescribeSubnets",
-        "ec2:DescribeSecurityGroups"
-      ]
-      Resource = "*"
-    },
-    {
-      Sid    = "CloudWatchLogs"
-      Effect = "Allow"
-      Action = [
-        "logs:CreateLogGroup",
-        "logs:CreateLogStream",
-        "logs:PutLogEvents",
-        "logs:DescribeLogGroups"
-      ]
-      Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/devdeploy/*"
-    },
-    {
-      Sid    = "IAMPassRole"
-      Effect = "Allow"
-      Action = "iam:PassRole"
-      Resource = [
-        "arn:aws:iam::${var.aws_account_id}:role/devdeploy-*"
-      ]
-    },
-    {
-      Sid    = "STSIdentity"
-      Effect = "Allow"
-      Action = "sts:GetCallerIdentity"
-      Resource = "*"
-    }
-  ]
+      {
+        Sid      = "ECRAuthentication"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "ECRImagePush"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:PutImage"
+        ]
+        Resource = [
+          "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/devdeploy-*"
+        ]
+      },
+      {
+        Sid    = "ECSDeployment"
+        Effect = "Allow"
+        Action = [
+          "ecs:RegisterTaskDefinition",
+          "ecs:DeregisterTaskDefinition",
+          "ecs:UpdateService",
+          "ecs:CreateService",
+          "ecs:DeleteService",
+          "ecs:DescribeServices",
+          "ecs:DescribeTaskDefinition",
+          "ecs:ListTaskDefinitions",
+          "ecs:DescribeTasks",
+          "ecs:ListTasks",
+          "ecs:WaitUntilServicesStable"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "ALBManagement"
+        Effect = "Allow"
+        Action = [
+          "elasticloadbalancing:CreateTargetGroup",
+          "elasticloadbalancing:DeleteTargetGroup",
+          "elasticloadbalancing:DescribeTargetGroups",
+          "elasticloadbalancing:ModifyTargetGroupAttributes",
+          "elasticloadbalancing:CreateRule",
+          "elasticloadbalancing:DeleteRule",
+          "elasticloadbalancing:DescribeRules",
+          "elasticloadbalancing:ModifyRule",
+          "elasticloadbalancing:DescribeLoadBalancers",
+          "elasticloadbalancing:DescribeListeners",
+          "elasticloadbalancing:RegisterTargets",
+          "elasticloadbalancing:DeregisterTargets",
+          "elasticloadbalancing:DescribeTargetHealth"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "EC2NetworkQuery"
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeVpcs",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeSecurityGroups"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "CloudWatchLogs"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogGroups"
+        ]
+        Resource = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/devdeploy/*"
+      },
+      {
+        Sid    = "IAMPassRole"
+        Effect = "Allow"
+        Action = "iam:PassRole"
+        Resource = [
+          "arn:aws:iam::${var.aws_account_id}:role/devdeploy-*"
+        ]
+      },
+      {
+        Sid      = "STSIdentity"
+        Effect   = "Allow"
+        Action   = "sts:GetCallerIdentity"
+        Resource = "*"
+      }
+    ]
   })
 }

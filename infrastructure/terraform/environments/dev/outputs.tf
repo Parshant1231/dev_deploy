@@ -15,12 +15,12 @@ output "private_subnet_ids" {
 
 output "ecs_cluster_name" {
   description = "ECS cluster name"
-  value       = module.compute.ecs_cluster_name
+  value       = module.ecs.ecs_cluster_name
 }
 
 output "alb_dns_name" {
   description = "ALB DNS name"
-  value       = module.compute.alb_dns_name
+  value       = module.alb.alb_dns_name
 }
 
 output "ecr_api_repository_url" {
@@ -34,12 +34,12 @@ output "dynamodb_table_names" {
 }
 
 output "github_actions_role_arn" {
-  value = module.security.github_actions_role_arn
+  value = module.iam.github_actions_role_arn
 }
 
 output "alb_listener_arn" {
   description = "ALB listener ARN for dynamic rule creation"
-  value       = module.compute.alb_listener_arn
+  value       = module.alb.alb_listener_arn
 }
 
 output "event_bus_name" {

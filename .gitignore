@@ -53,4 +53,19 @@ TOKEN_FLOW_DIAGRAM.txt
 WHAT_TO_EXPECT.md
 test_all.sh
 /tmp/
+
+# Terraform sensitive variable files (never commit)
+**/secrets.auto.tfvars
 infrastructure/terraform/modules/lambda/auto-destroy.zip
+# Add this line
+**/secrets.auto.tfvarsauto_destroy.zip
+
+# Terraform sensitive files
+**/backend.hcl
+**/*.auto.tfvars
+**/*.tfvars
+!**/*.tfvars.example
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.zip
