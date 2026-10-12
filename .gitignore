@@ -30,7 +30,7 @@ override.tf.json
 .aws/
 
 # Logs
-logs/
+/logs/
 *.log
 npm-debug.log*
 
